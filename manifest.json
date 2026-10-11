@@ -1,6 +1,6 @@
 {
   "name": "MiddleClick+",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "manifest_version": 3,
   "description": "Middle click option for clickables. Opens detected destinations in a background tab next to the source tab, with ChatGPT sidebar support.",
   "permissions": [
