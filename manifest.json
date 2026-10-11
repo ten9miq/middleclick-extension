@@ -1,8 +1,8 @@
 {
   "name": "MiddleClick+",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "manifest_version": 3,
-  "description": "Middle click option for clickables. Opens detected destinations in a background tab next to the source tab.",
+  "description": "Middle click option for clickables. Opens detected destinations in a background tab next to the source tab, with ChatGPT sidebar support.",
   "permissions": [
     "contextMenus",
     "tabs"
@@ -26,6 +26,18 @@
       "run_at": "document_start",
       "all_frames": true,
       "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://www.chatgpt.com/*"
+      ],
+      "js": [
+        "chatgpt-bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
     }
   ]
 }

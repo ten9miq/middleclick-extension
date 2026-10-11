@@ -14,6 +14,19 @@ This build extends middle-click navigation for JavaScript-driven buttons and SPA
 
 The extension can resolve destinations from common href/router/data attributes, inline navigation handlers, GET forms, unique descendant links, and Shadow DOM event paths.
 
+## ChatGPT support
+
+ChatGPT sidebar items sometimes have no usable href in the clicked DOM element. This build adds ChatGPT-specific resolution for:
+
+- New chat / Home.
+- Conversation titles.
+- Project names.
+- Plugins and Schedules fixed routes.
+
+It learns conversation/project mappings from DOM attributes, sidebar links, ChatGPT's already-fetched sidebar API responses, and normal left-click navigation as a fallback.
+
+The ChatGPT response bridge runs only on chatgpt.com in the page's MAIN JavaScript world. It does not issue additional requests and does not expose Chrome extension APIs to the page.
+
 ## Install
 
 1. Extract this folder.

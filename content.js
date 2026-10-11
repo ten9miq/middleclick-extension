@@ -25,8 +25,44 @@
   ];
 
   const DATA_URL_KEY = /(?:^|[-_])(?:url|href|link|route|path|destination|permalink|uri|navigate|nav)(?:$|[-_])/i;
+  const CHATGPT_BRIDGE_SOURCE = "middleclick-plus-chatgpt-bridge-v1";
+  const CHATGPT_PROJECT_ID_RE = /g-p-[0-9a-z-]+/i;
+  const CHATGPT_CONVERSATION_PATH_RE = /\/c\/([0-9a-f-]{20,})(?:[/?#]|$)/i;
+  const CHATGPT_PROJECT_PATH_RE = /\/g\/(g-p-[0-9a-z-]+)\/project(?:[/?#]|$)/i;
+
+  const CHATGPT_FIXED_ROUTES = new Map([
+    ["chatgpt", "/"],
+    ["home", "/"],
+    ["\u30db\u30fc\u30e0", "/"],
+    ["new chat", "/"],
+    ["start new chat", "/"],
+    ["\u65b0\u3057\u3044\u30c1\u30e3\u30c3\u30c8", "/"],
+    ["\u65b0\u898f\u30c1\u30e3\u30c3\u30c8", "/"],
+    ["plugins", "/plugins"],
+    ["\u30d7\u30e9\u30b0\u30a4\u30f3", "/plugins"],
+    ["schedule", "/schedules"],
+    ["scheduled", "/schedules"],
+    ["schedules", "/schedules"],
+    ["\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb", "/schedules"],
+    ["\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u6e08\u307f", "/schedules"]
+  ]);
+
+  const chatGPTMappings = new Map();
   let requestSequence = 0;
   let lastHandledMiddle = { url: "", time: 0 };
+
+  function normalizeText(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeKey(value) {
+    return normalizeText(value).toLocaleLowerCase();
+  }
+
+  function isChatGPTHost() {
+    const host = location.hostname.toLowerCase();
+    return host === "chatgpt.com" || host === "www.chatgpt.com";
+  }
 
   function hasMods(e) {
     return e.ctrlKey || e.metaKey || e.shiftKey || e.altKey;
@@ -230,6 +266,144 @@
     return urls.size === 1 ? [...urls][0] : null;
   }
 
+  function chatGPTRouteFromValue(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+
+    const projectPath = raw.match(CHATGPT_PROJECT_PATH_RE);
+    if (projectPath) return `/g/${projectPath[1]}/project`;
+
+    const conversationPath = raw.match(CHATGPT_CONVERSATION_PATH_RE);
+    if (conversationPath) return `/c/${conversationPath[1]}`;
+
+    const projectId = raw.match(CHATGPT_PROJECT_ID_RE);
+    if (projectId) return `/g/${projectId[0]}/project`;
+
+    return null;
+  }
+
+  function rememberChatGPT(name, route) {
+    const key = normalizeKey(name);
+    route = chatGPTRouteFromValue(route);
+    if (!key || !route) return;
+
+    let urls = chatGPTMappings.get(key);
+    if (!urls) {
+      urls = new Set();
+      chatGPTMappings.set(key, urls);
+    }
+    urls.add(route);
+  }
+
+  function lookupChatGPT(name) {
+    const key = normalizeKey(name);
+    if (!key) return null;
+
+    const fixed = CHATGPT_FIXED_ROUTES.get(key);
+    if (fixed) return fixed;
+
+    const urls = chatGPTMappings.get(key);
+    if (!urls || urls.size !== 1) return null;
+    return [...urls][0];
+  }
+
+  function isChatGPTMenuControl(target) {
+    if (!(target instanceof Element)) return false;
+
+    if (target.closest('[aria-haspopup="menu"]')) return true;
+
+    const button = target.closest("button");
+    if (!button) return false;
+
+    const label = normalizeKey(button.getAttribute("aria-label") ?? button.getAttribute("title"));
+    return (
+      label === "more" ||
+      label === "options" ||
+      label === "\u305d\u306e\u4ed6" ||
+      label === "\u30aa\u30d7\u30b7\u30e7\u30f3" ||
+      label.includes("more options") ||
+      label.includes("\u305d\u306e\u4ed6\u306e\u30aa\u30d7\u30b7\u30e7\u30f3")
+    );
+  }
+
+  function isChatGPTSidebarTarget(target, event) {
+    if (!(target instanceof Element)) return false;
+
+    try {
+      if (target.closest([
+        ".sidebar-item",
+        "aside",
+        "nav",
+        '[data-testid*="sidebar"]',
+        '[data-testid*="history"]',
+        '[class*="sidebar"]',
+        '[id*="sidebar"]'
+      ].join(","))) return true;
+    } catch {
+      // Continue to geometry fallback.
+    }
+
+    return (
+      Number.isFinite(event?.clientX) &&
+      event.clientX >= 0 &&
+      event.clientX <= 440
+    );
+  }
+
+  function chatGPTCandidateTexts(target) {
+    const result = [];
+    const seen = new Set();
+    let element = target instanceof Element ? target : null;
+
+    for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
+      const values = [
+        element.getAttribute?.("aria-label"),
+        element.getAttribute?.("title"),
+        element.textContent
+      ];
+
+      for (const value of values) {
+        const text = normalizeText(value);
+        if (!text || text.length > 300) continue;
+        const key = normalizeKey(text);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(text);
+      }
+    }
+
+    return result;
+  }
+
+  function chatGPTUrlFromAttributes(target) {
+    let element = target instanceof Element ? target : null;
+
+    for (let depth = 0; element && depth < 8; depth++, element = element.parentElement) {
+      for (const attr of element.attributes ?? []) {
+        const route = chatGPTRouteFromValue(attr.value);
+        if (route) return route;
+      }
+    }
+
+    return null;
+  }
+
+  function resolveChatGPTUrl(e) {
+    if (!isChatGPTHost()) return null;
+    if (!isChatGPTSidebarTarget(e.target, e)) return null;
+    if (isChatGPTMenuControl(e.target)) return null;
+
+    const attrRoute = chatGPTUrlFromAttributes(e.target);
+    if (attrRoute) return toWebUrl(attrRoute);
+
+    for (const text of chatGPTCandidateTexts(e.target)) {
+      const route = lookupChatGPT(text);
+      if (route) return toWebUrl(route);
+    }
+
+    return null;
+  }
+
   function resolveUrl(e) {
     const elements = getEventElements(e);
 
@@ -237,6 +411,9 @@
       const url = urlFromElementAttributes(el);
       if (url) return url;
     }
+
+    const chatGPTUrl = resolveChatGPTUrl(e);
+    if (chatGPTUrl) return chatGPTUrl;
 
     const formUrl = urlFromGetForm(e.target);
     if (formUrl) return formUrl;
@@ -301,8 +478,99 @@
     if (url) maybeOpen(url);
   }, { capture: true, passive: true });
 
+  document.addEventListener("pointerdown", handleResolvedMiddle, { capture: true, passive: false });
   document.addEventListener("mousedown", handleResolvedMiddle, { capture: true, passive: false });
   document.addEventListener("mouseup", suppressResolvedMiddle, { capture: true, passive: false });
   document.addEventListener("auxclick", suppressResolvedMiddle, { capture: true, passive: false });
 
+  function learnChatGPTDomLinks(root) {
+    if (!isChatGPTHost() || !root?.querySelectorAll) return;
+
+    let anchors;
+    try {
+      anchors = root.querySelectorAll('a[href*="/c/"], a[href*="/g/"][href*="/project"]');
+    } catch {
+      return;
+    }
+
+    let count = 0;
+    for (const anchor of anchors) {
+      if (++count > 500) break;
+      const route = chatGPTRouteFromValue(anchor.getAttribute("href"));
+      if (!route) continue;
+
+      const names = [
+        anchor.getAttribute("aria-label"),
+        anchor.getAttribute("title"),
+        anchor.textContent,
+        anchor.closest?.('[data-testid], [role="link"], li, div')?.textContent
+      ];
+
+      for (const name of names) {
+        const text = normalizeText(name);
+        if (text && text.length <= 300) rememberChatGPT(text, route);
+      }
+    }
+  }
+
+  function setupChatGPTLearning() {
+    if (!isChatGPTHost() || window !== top) return;
+
+    window.addEventListener("message", (event) => {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (data?.source !== CHATGPT_BRIDGE_SOURCE || data?.type !== "mapping") return;
+      if (typeof data.name !== "string" || typeof data.url !== "string") return;
+      rememberChatGPT(data.name, data.url);
+    });
+
+    window.postMessage({ source: CHATGPT_BRIDGE_SOURCE, type: "ready" }, location.origin);
+
+    let domScanTimer = 0;
+    const scheduleDomScan = () => {
+      clearTimeout(domScanTimer);
+      domScanTimer = setTimeout(() => learnChatGPTDomLinks(document), 100);
+    };
+
+    if (document.documentElement) {
+      learnChatGPTDomLinks(document);
+      new MutationObserver(scheduleDomScan).observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    } else {
+      document.addEventListener("DOMContentLoaded", () => {
+        learnChatGPTDomLinks(document);
+        if (document.documentElement) {
+          new MutationObserver(scheduleDomScan).observe(document.documentElement, {
+            childList: true,
+            subtree: true
+          });
+        }
+      }, { once: true });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (!isChatGPTSidebarTarget(event.target, event)) return;
+      if (isChatGPTMenuControl(event.target)) return;
+
+      const names = chatGPTCandidateTexts(event.target).slice(0, 4);
+      if (!names.length) return;
+
+      const before = location.pathname;
+      const delays = [50, 150, 350, 800, 1600];
+
+      for (const delay of delays) {
+        setTimeout(() => {
+          if (location.pathname === before) return;
+          const route = chatGPTRouteFromValue(location.pathname);
+          if (!route) return;
+          for (const name of names) rememberChatGPT(name, route);
+        }, delay);
+      }
+    }, true);
+  }
+
+  setupChatGPTLearning();
 })();
