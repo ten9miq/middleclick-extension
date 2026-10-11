@@ -487,19 +487,9 @@
     e.stopImmediatePropagation();
   }
 
-  document.addEventListener("auxclick", (e) => {
-    if (e.button !== 1 || hasMods(e)) return;
-
-    const a = findNativeAnchor(e);
-    if (!a || a.hasAttribute?.("download")) return;
-
-    // ChatGPT sidebar middle clicks are handled at pointerdown/mousedown and
-    // intentionally forced through the extension's background-tab path.
-    if (shouldForceExtensionBackground(e, a)) return;
-
-    const url = toWebUrl(a.getAttribute?.("href"));
-    if (url) maybeOpen(url);
-  }, { capture: true, passive: true });
+  // Native anchors are left entirely to the browser. Scheduling a fallback
+  // for them can duplicate tabs when redirects or site handlers change the URL
+  // observed by tabs.onCreated. ChatGPT sidebar anchors are handled below.
 
   document.addEventListener("pointerdown", handleResolvedMiddle, { capture: true, passive: false });
   document.addEventListener("mousedown", handleResolvedMiddle, { capture: true, passive: false });

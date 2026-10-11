@@ -40,3 +40,4 @@ The ChatGPT response bridge runs only on chatgpt.com in the page's MAIN JavaScri
 
 - ChatGPT sidebar middle-click navigation is forced through the extension background-tab path (`active: false`) instead of allowing ChatGPT/native navigation to create an active tab.
 - Normal links on other sites still use the browser's native middle-click behavior when available.
+- Native links no longer schedule an extension fallback tab, preventing duplicate tabs when Gmail or another site redirects the destination.
