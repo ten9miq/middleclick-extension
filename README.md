@@ -34,3 +34,9 @@ The ChatGPT response bridge runs only on chatgpt.com in the page's MAIN JavaScri
 3. Enable Developer mode.
 4. Disable/remove the older MiddleClick+ build to avoid double handling.
 5. Choose `Load unpacked` and select this folder.
+
+
+## 1.2.1 behavior note
+
+- ChatGPT sidebar middle-click navigation is forced through the extension background-tab path (`active: false`) instead of allowing ChatGPT/native navigation to create an active tab.
+- Normal links on other sites still use the browser's native middle-click behavior when available.

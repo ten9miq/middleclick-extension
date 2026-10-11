@@ -435,13 +435,29 @@
     });
   }
 
+  function shouldForceExtensionBackground(e, nativeAnchor) {
+    if (!isChatGPTHost()) return false;
+    if (!isChatGPTSidebarTarget(e.target, e)) return false;
+    if (isChatGPTMenuControl(e.target)) return false;
+
+    // ChatGPT sometimes handles sidebar navigation itself even when an <a>
+    // exists. Letting the page/native handler win can create an active tab.
+    // For sidebar navigation we therefore route the middle click through the
+    // extension so chrome.tabs.create({ active: false }) is authoritative.
+    if (nativeAnchor && toWebUrl(nativeAnchor.getAttribute?.("href"))) return true;
+    return Boolean(resolveChatGPTUrl(e));
+  }
+
   function handleResolvedMiddle(e) {
     if (e.button !== 1 || hasMods(e)) return;
 
     const native = findNativeAnchor(e);
-    if (native && toWebUrl(native.getAttribute?.("href"))) return;
+    const forceBackground = shouldForceExtensionBackground(e, native);
+    if (!forceBackground && native && toWebUrl(native.getAttribute?.("href"))) return;
 
-    const url = resolveUrl(e);
+    const url = forceBackground
+      ? (toWebUrl(native?.getAttribute?.("href")) || resolveChatGPTUrl(e) || resolveUrl(e))
+      : resolveUrl(e);
     if (!url) return;
 
     e.preventDefault();
@@ -458,9 +474,12 @@
     if (e.button !== 1 || hasMods(e)) return;
 
     const native = findNativeAnchor(e);
-    if (native && toWebUrl(native.getAttribute?.("href"))) return;
+    const forceBackground = shouldForceExtensionBackground(e, native);
+    if (!forceBackground && native && toWebUrl(native.getAttribute?.("href"))) return;
 
-    const url = resolveUrl(e);
+    const url = forceBackground
+      ? (toWebUrl(native?.getAttribute?.("href")) || resolveChatGPTUrl(e) || resolveUrl(e))
+      : resolveUrl(e);
     if (!url) return;
 
     e.preventDefault();
@@ -473,6 +492,10 @@
 
     const a = findNativeAnchor(e);
     if (!a || a.hasAttribute?.("download")) return;
+
+    // ChatGPT sidebar middle clicks are handled at pointerdown/mousedown and
+    // intentionally forced through the extension's background-tab path.
+    if (shouldForceExtensionBackground(e, a)) return;
 
     const url = toWebUrl(a.getAttribute?.("href"));
     if (url) maybeOpen(url);
