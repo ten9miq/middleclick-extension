@@ -8,6 +8,7 @@ This build extends middle-click navigation for JavaScript-driven buttons and SPA
 - Native links keep Chrome's normal middle-click behavior.
 - Non-anchor elements with a safely detectable destination open in a background tab.
 - New tabs created by the extension are inserted directly to the right of the source tab.
+- If the source tab belongs to a tab group, extension-created middle-click tabs join that same group.
 - Unresolved buttons are left alone instead of incorrectly duplicating the current page.
 
 ## Generic destination detection
@@ -45,3 +46,9 @@ The ChatGPT response bridge runs only on chatgpt.com in the page's MAIN JavaScri
 ## Changes
 
 See [CHANGES.md](CHANGES.md) for the version history.
+
+## Development and browser verification
+
+See [Chrome DevTools MCP setup and verification](docs/CHROME_DEVTOOLS_MCP.md)
+for Windows / PowerShell / Codex development using a project-specific Google Chrome profile.
+This folder is the unpacked extension; no build step is required.

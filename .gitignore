@@ -11,3 +11,6 @@ package-lock.json
 
 # Extension specific
 *.pem
+
+# Machine-specific Codex MCP paths (use config.toml.example as a template)
+/.codex/config.toml

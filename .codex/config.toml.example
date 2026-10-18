@@ -1,0 +1,12 @@
+# Replace the placeholder with the unpacked extension's absolute repository path.
+# Save as config.toml locally; environment variables in args are not expanded.
+[mcp_servers.chrome-devtools]
+enabled = true
+command = "npx"
+args = [
+  "-y",
+  "chrome-devtools-mcp@latest",
+  "--categoryExtensions=true",
+  '--workspace=<REPOSITORY_ABSOLUTE_PATH>',
+  "--browser-url=http://127.0.0.1:9223"
+]
