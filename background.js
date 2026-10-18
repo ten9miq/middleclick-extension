@@ -26,6 +26,32 @@ function normalize(url) {
   }
 }
 
+async function inheritSourceTabGroup(createdTab, sourceTab) {
+  if (createdTab?.id === undefined || sourceTab?.id === undefined) return;
+
+  try {
+    // Read after creation: the source may have changed groups or disappeared.
+    const source = await chrome.tabs.get(sourceTab.id);
+    if (!Number.isInteger(source.groupId) || source.groupId < 0) return;
+    if (createdTab.windowId !== source.windowId) return;
+
+    await chrome.tabs.group({ groupId: source.groupId, tabIds: createdTab.id });
+
+    // Grouping can reposition the tab. Restore adjacency within the group.
+    const [currentSource, currentTab] = await Promise.all([
+      chrome.tabs.get(source.id),
+      chrome.tabs.get(createdTab.id)
+    ]);
+    if (currentSource.groupId !== source.groupId || currentTab.groupId !== source.groupId) return;
+    if (currentSource.windowId !== currentTab.windowId) return;
+    const index = currentSource.index + (currentTab.index < currentSource.index ? 0 : 1);
+    if (currentTab.index !== index) await chrome.tabs.move(createdTab.id, { index });
+  } catch (error) {
+    // Never retry tab creation when grouping fails: that would open duplicates.
+    console.warn("MiddleClick+: could not inherit source tab group.", error);
+  }
+}
+
 async function createBackgroundTabNextToSource(url, sourceTab) {
   const createProperties = { url, active: false };
 
@@ -50,15 +76,19 @@ async function createBackgroundTabNextToSource(url, sourceTab) {
     }
   }
 
+  let createdTab;
   try {
-    return await chrome.tabs.create(createProperties);
+    createdTab = await chrome.tabs.create(createProperties);
   } catch {
     // openerTabId can fail if the source tab closed between tabs.get() and create().
     // Retry without opener/index rather than dropping the requested tab entirely.
     const fallback = { url, active: false };
     if (sourceTab?.windowId !== undefined) fallback.windowId = sourceTab.windowId;
-    return chrome.tabs.create(fallback);
+    createdTab = await chrome.tabs.create(fallback);
   }
+
+  await inheritSourceTabGroup(createdTab, sourceTab);
+  return createdTab;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

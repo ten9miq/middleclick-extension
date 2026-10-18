@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3
+
+- Keep extension-created middle-click tabs in the source tab's group, while preserving background opening and placement directly to its right.
+- Preserve the created tab without opening a duplicate if the source group disappears or grouping fails.
+
 ## 1.2.2
 
 - Remove fallback tab requests for native links to prevent duplicates when destination URLs change through redirects (for example, Gmail links).
