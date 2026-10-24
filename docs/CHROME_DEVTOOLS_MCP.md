@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.2.3。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.3.0。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
