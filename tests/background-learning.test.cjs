@@ -7,7 +7,7 @@ const learning = require('../navigation-learning.js');
 const source = fs.readFileSync(path.join(__dirname, '../background.js'), 'utf8');
 const sender = { tab: { id: 10 }, frameId: 0, documentId: 'source-document', url: 'https://example.com/start' };
 
-function harness(seed = {}) {
+function harness(seed = {}, { failPermissionWrite = false } = {}) {
   let now = 1_000_000;
   let nextTimer = 0;
   const timers = new Map();
@@ -17,11 +17,14 @@ function harness(seed = {}) {
   const chrome = {
     runtime: { onMessage: event(), onInstalled: event() },
     contextMenus: { onClicked: event(), create() {}, removeAll() {} },
-    tabs: { onCreated: event(), onRemoved: event() },
+    tabs: { onCreated: event(), onRemoved: event(), async sendMessage() {} },
     webNavigation: { onHistoryStateUpdated: event(), onReferenceFragmentUpdated: event(), onCommitted: event(), onErrorOccurred: event() },
     storage: { local: {
       async get() { return structuredClone(storage); },
-      async set(data) { Object.assign(storage, structuredClone(data)); },
+      async set(data) {
+        if (failPermissionWrite && Object.hasOwn(data, learning.SITE_PERMISSION_KEY)) throw new Error('Storage unavailable');
+        Object.assign(storage, structuredClone(data));
+      },
     } },
   };
   class Clock extends Date { static now() { return now; } }
@@ -54,8 +57,12 @@ function harness(seed = {}) {
       emit(chrome.webNavigation[kind], { tabId: 10, frameId: 0, documentId: 'source-document', url, ...detail });
     },
     forget(url = 'https://example.com/start') { emit(chrome.contextMenus.onClicked, { menuItemId: 'forgetLearnedNavigation', pageUrl: url }); },
+    revoke(url = 'https://example.com/start') { emit(chrome.contextMenus.onClicked,
+      { menuItemId: 'revokeSiteLearningPermission', pageUrl: url }, { id: 10 }); },
+    request(message, who = sender) { return new Promise(resolve => emit(chrome.runtime.onMessage, message, who, resolve)); },
     close(tabId = 10) { emit(chrome.tabs.onRemoved, tabId); },
     flush() { return vm.runInContext('learningWrites', context); },
+    flushPermissions() { return vm.runInContext('sitePermissionWrites', context); },
     entries() { return storage[learning.STORAGE_KEY]?.entries || []; },
   };
 }
@@ -161,4 +168,66 @@ test('forget menu removes only that origin and cancels outstanding learning', as
   await h.flush();
   assert.equal(h.entries().length, 1);
   assert.equal(h.entries()[0].origin, 'https://other.example');
+});
+
+test('site consent must be explicit, same-origin, top-frame and outside incognito', async () => {
+  for (const [overrides, who] of [
+    [{ confirmed: false }, sender], [{ origin: 'https://other.example' }, sender],
+    [{}, { ...sender, frameId: 1 }], [{}, { ...sender, tab: { id: 10, incognito: true } }],
+  ]) {
+    const h = harness();
+    const response = await h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true, ...overrides }, who);
+    assert.equal(response.ok, false);
+    assert.equal(h.storage[learning.SITE_PERMISSION_KEY], undefined);
+  }
+});
+
+test('site grants survive worker restart; revocation retains mappings and other site grants', async () => {
+  const entries = learning.remember([], 'https://example.com', 'one', 'https://example.com/one', 999_999);
+  const h = harness({ [learning.STORAGE_KEY]: { version: 1, entries } });
+  assert.equal((await h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true })).ok, true);
+  const other = { ...sender, url: 'https://other.example/start' };
+  assert.equal((await h.request({ type: 'grantSiteLearningPermission', origin: 'https://other.example', confirmed: true }, other)).ok, true);
+  const next = harness(h.storage);
+  assert.equal((await next.request({ type: 'getSiteLearningPermission', origin: 'https://example.com' })).allowed, true);
+  next.revoke(); await next.flushPermissions();
+  assert.equal((await next.request({ type: 'getSiteLearningPermission', origin: 'https://example.com' })).allowed, false);
+  assert.equal((await next.request({ type: 'getSiteLearningPermission', origin: 'https://other.example' }, other)).allowed, true);
+  assert.equal(next.entries()[0].url, 'https://example.com/one');
+});
+
+test('concurrent grants are serialized without losing another site permission', async () => {
+  const h = harness();
+  const other = { ...sender, url: 'https://other.example/start' };
+  const results = await Promise.all([
+    h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true }),
+    h.request({ type: 'grantSiteLearningPermission', origin: 'https://other.example', confirmed: true }, other),
+  ]);
+  assert.equal(results.every(result => result.ok), true);
+  assert.deepEqual(h.storage[learning.SITE_PERMISSION_KEY].origins, ['https://example.com', 'https://other.example']);
+});
+
+test('failed grants stay denied and cannot authorize an unknown-target discovery', async () => {
+  const h = harness({}, { failPermissionWrite: true });
+  assert.equal((await h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true })).ok, false);
+  assert.equal((await h.request({ type: 'getSiteLearningPermission', origin: 'https://example.com' })).allowed, false);
+  const response = await h.request({ type: 'beginSiteNavigationProbe', key: 'unknown', entryKey: 'entry', sourceUrl: sender.url });
+  assert.equal(response.reason, 'permission-required');
+});
+
+test('forgetting learned mappings does not silently revoke the separately granted site permission', async () => {
+  const h = harness();
+  await h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true });
+  h.forget(); await h.flush();
+  assert.equal((await h.request({ type: 'getSiteLearningPermission', origin: 'https://example.com' })).allowed, true);
+});
+
+test('revoking site consent cancels a pending discovery and blocks the next unknown target', async () => {
+  const h = harness();
+  await h.request({ type: 'grantSiteLearningPermission', origin: 'https://example.com', confirmed: true });
+  const request = { type: 'beginSiteNavigationProbe', key: 'first', entryKey: 'entry', sourceUrl: sender.url };
+  assert.equal((await h.request(request)).ok, true);
+  h.revoke(); await h.flushPermissions();
+  assert.equal((await h.request({ ...request, key: 'second' })).reason, 'permission-required');
+  assert.equal(h.entries().length, 0);
 });

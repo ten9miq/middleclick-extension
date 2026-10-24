@@ -9,7 +9,7 @@ This build extends middle-click navigation for JavaScript-driven buttons and SPA
 - Non-anchor elements with a safely detectable destination open in a background tab.
 - New tabs created by the extension are inserted directly to the right of the source tab.
 - If the source tab belongs to a tab group, extension-created middle-click tabs join that same group.
-- Unlearned, identifiable controls offer a per-target confirmation before executing a discovery click. Cancellation never clicks the target.
+- The first unlearned control asks for site-wide permission. After approval, other unlearned controls on that site are discovered without another prompt. Cancellation never clicks the target.
 
 ## Generic destination detection
 
@@ -19,9 +19,18 @@ SVG drawing references (such as `<use href="...svg#icon">`), resource metadata a
 
 ## Generic navigation learning
 
-The extension passively learns identifiable controls from normal left clicks. If an unlearned control is middle-clicked, it first asks permission to execute that specific control's left-click action. After approval it observes the destination, restores the original page, and opens the destination in an adjacent background tab. Subsequent middle clicks use the learned URL directly. Cancelling the prompt does not click, navigate, or create a tab.
+The extension passively learns identifiable controls from normal left clicks. When an unlearned control is middle-clicked on an unapproved site, it asks once for permission to discover destinations on that site. After the grant is saved, it can execute the left-click action of other eligible unlearned controls there without additional confirmation. It observes the destination, restores the original page, and opens the destination in an adjacent background tab. Learned controls use the stored URL directly. Cancelling the site prompt does not grant permission, click, navigate, or create a tab.
 
-Discovery clicks require confirmation every time until a usable destination has been learned. They are limited to identifiable controls in the top frame outside forms, editable areas, disabled controls and popup menus. A discovery click can run all of the target's handler, including data changes which cannot be undone by navigating back; the prompt explains this before approval. There is no automatic unconfirmed discovery click.
+Site consent explicitly includes future unknown controls. Discovery is limited to identifiable controls in the top frame outside forms, editable areas, disabled controls and popup menus. A discovery click can run all of the target's handler, including data changes which cannot be undone by navigating back; the site prompt explains this before approval. The background checks the saved site permission before each discovery, and failed permission saves never execute a target.
+
+## Site permission
+
+- Grants are stored locally, separately from learned mappings, and survive page, browser and extension reloads. They remain valid until revoked, without the mappings' 90-day expiry.
+- A site means an exact origin: scheme, hostname and port. Permission for `https://example.com` does not permit `http://example.com`, `https://sub.example.com`, or another port.
+- Right-click the page and choose **MiddleClick+ → Revoke automatic learning permission for this site** to revoke that origin's grant. The next unknown target asks for permission again. Already learned URLs remain usable.
+- **Forget learned destinations for this site** clears mappings but leaves the site grant intact.
+
+## Saved destinations
 
 Navigation is observed through Chrome's `webNavigation` events for SPA history/hash updates and full document navigation. Page APIs and network responses are not intercepted.
 
@@ -29,10 +38,10 @@ Navigation is observed through Chrome's `webNavigation` events for SPA history/h
 - Up to 500 mappings are retained, for 90 days after the last observed left-click navigation. Using a cached mapping does not extend that period.
 - Identities include control identifiers, a short label and navigation context. Label-only identities also include the source path/query. Saving one control does not train unrelated controls.
 - Equal labels are distinguished by stable surrounding section/region metadata when the basic identity collides. DOM position is not used, so reordering does not select another control. Controls that remain indistinguishable and identities observed navigating to different destinations are not reused. Existing unambiguous mapping keys are preserved. Conflicting mappings stay blocked until expiry or manual clearing.
-- Passive learning requires an unmodified, trusted left click followed within 2.5 seconds by a same-frame navigation. Confirmed discovery waits up to 10 seconds for navigation, with a 300 ms settling period for route changes. Submissions, form-associated controls, editable controls, disabled controls and popup menus are excluded. No learning occurs in incognito mode. Cross-origin and recognizable authentication/token URLs are not stored.
+- Passive learning requires an unmodified, trusted left click followed within 2.5 seconds by a same-frame navigation. Site-authorized discovery waits up to 10 seconds for navigation, with a 300 ms settling period for route changes. Submissions, form-associated controls, editable controls, disabled controls and popup menus are excluded. No learning occurs in incognito mode. Cross-origin and recognizable authentication/token URLs are not stored.
 - Right-click the page and choose **MiddleClick+ → Forget learned destinations for this site** to clear that origin's mappings. Already-open pages receive the update.
 
-For confirmed discovery, local persistence and source restoration start in parallel. The new tab waits for the source URL to be restored, but not for storage I/O to finish; the restored page also receives the new mapping in memory. Restoration uses the exact original Navigation API history entry when available. If replacement navigation removed that entry, the source URL is reloaded. Scroll, draft and other application state cannot be guaranteed to survive a reload.
+For site-authorized discovery, local persistence and source restoration start in parallel. The new tab waits for the source URL to be restored, but not for storage I/O to finish; the restored page also receives the new mapping in memory. Restoration uses the exact original Navigation API history entry when available. If replacement navigation removed that entry, the source URL is reloaded. Scroll, draft and other application state cannot be guaranteed to survive a reload.
 
 A confirmed router navigation can keep the same URL while pushing a new history entry. That case is recognized by a changed Navigation API entry key; an unchanged URL and unchanged entry are not sufficient evidence of navigation. History restoration checks the original entry key as well as the URL before opening the new tab.
 

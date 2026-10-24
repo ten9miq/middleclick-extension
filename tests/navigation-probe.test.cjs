@@ -11,7 +11,7 @@ const sender = { tab: { id: 10, index: 2, active: true, groupId: 7 }, frameId: 0
   documentId: 'document', url: sourceUrl };
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
-function harness({ saved, delayedRestore = false, replace = false, failRestore = false, entries = [], readEntry } = {}) {
+function harness({ saved, delayedRestore = false, replace = false, failRestore = false, entries = [], readEntry, siteAllowed = true } = {}) {
   const event = () => ({ listeners: [], addListener(fn) { this.listeners.push(fn); } });
   const timers = new Map();
   const trace = [];
@@ -52,12 +52,13 @@ function harness({ saved, delayedRestore = false, replace = false, failRestore =
     save(transform) { trace.push('save'); transform(entries); return saved || Promise.resolve(true); },
     async open(url, original) { assert.equal(tab.url, sourceUrl); trace.push('open'); opened.push({ url, original }); },
     cancelPassive() { trace.push('cancel-passive'); },
+    isSiteAllowed: async () => siteAllowed,
   });
   function emit(event, ...args) { return event.listeners.map(fn => fn(...args)); }
   return { trace, notices, opened, tab, controller,
     async begin(overrides = {}, who = sender) {
       let response;
-      emit(chrome.runtime.onMessage, { type: 'beginConfirmedNavigationProbe', confirmed: true,
+      emit(chrome.runtime.onMessage, { type: 'beginSiteNavigationProbe',
         key: 'identity', entryKey: 'source-key', sourceUrl, ...overrides }, who, value => { response = value; });
       await flush();
       return response;
@@ -111,9 +112,9 @@ test('replacement navigation reloads the original URL before opening', async () 
   assert.equal(h.opened.length, 1);
 });
 
-test('confirmation, eligible origin/frame and non-incognito context are mandatory', async () => {
+test('eligible origin/frame and non-incognito context are mandatory', async () => {
   for (const [message, who] of [
-    [{ confirmed: false }, sender], [{}, { ...sender, frameId: 1 }],
+    [{}, { ...sender, frameId: 1 }],
     [{}, { ...sender, tab: { id: 10, incognito: true } }],
     [{ sourceUrl: 'https://other.example/' }, sender],
   ]) {
@@ -121,6 +122,13 @@ test('confirmation, eligible origin/frame and non-incognito context are mandator
     assert.equal((await h.begin(message, who)).ok, false);
     assert.equal(h.trace.length, 0);
   }
+});
+
+test('each discovery requires a persisted site grant, not a claimed confirmation flag', async () => {
+  const h = harness({ siteAllowed: false });
+  assert.equal((await h.begin({ confirmed: true })).reason, 'permission-required');
+  assert.equal(h.trace.length, 0);
+  assert.equal(h.opened.length, 0);
 });
 
 test('ambiguous identities cannot be rediscovered automatically after confirmation', async () => {

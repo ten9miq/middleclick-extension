@@ -7,11 +7,23 @@ function setupContextMenu() {
   chrome.contextMenus.create({ id: "openInNewTab", title: "New Tab", contexts: ["all"] });
   chrome.contextMenus.create({ id: "openInNewWindow", title: "New Window", contexts: ["all"] });
   chrome.contextMenus.create({ id: "forgetLearnedNavigation", title: "Forget learned destinations for this site", contexts: ["all"] });
+  chrome.contextMenus.create({ id: "revokeSiteLearningPermission", title: "Revoke automatic learning permission for this site", contexts: ["all"] });
 }
 
 chrome.runtime.onInstalled.addListener(() => chrome.contextMenus.removeAll(setupContextMenu));
 
-chrome.contextMenus.onClicked.addListener((info) => {
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === "revokeSiteLearningPermission") {
+    const origin = MiddleClickLearning.webUrl(info.frameUrl || info.pageUrl)?.origin;
+    if (origin) {
+      navigationProbes.cancelOrigin(origin);
+      updateSitePermission(origin, false).then(ok => {
+        if (tab?.id !== undefined) chrome.tabs.sendMessage(tab.id, { type: "navigationProbeFeedback",
+          reason: ok ? "permission-revoked" : "permission-revoke-failed" }, { frameId: 0 }).catch(() => {});
+      });
+    }
+    return;
+  }
   if (info.menuItemId === "forgetLearnedNavigation") {
     const origin = MiddleClickLearning.webUrl(info.frameUrl || info.pageUrl)?.origin;
     if (origin) {
@@ -34,6 +46,41 @@ let pendingSequence = 0;
 const LEARNING_CLICKS = new Map();
 const LEARNING_WINDOW_MS = 2500;
 let learningWrites = Promise.resolve();
+let sitePermissionWrites = Promise.resolve();
+
+function updateSitePermission(origin, allowed) {
+  sitePermissionWrites = sitePermissionWrites.then(async () => {
+    const { SITE_PERMISSION_KEY, setSiteAllowed } = MiddleClickLearning;
+    const data = await chrome.storage.local.get(SITE_PERMISSION_KEY);
+    await chrome.storage.local.set({ [SITE_PERMISSION_KEY]: setSiteAllowed(data[SITE_PERMISSION_KEY], origin, allowed) });
+    return true;
+  }).catch(error => { console.warn("MiddleClick+: could not save site permission.", error); return false; });
+  return sitePermissionWrites;
+}
+
+async function isSiteLearningAllowed(origin) {
+  await sitePermissionWrites;
+  const { SITE_PERMISSION_KEY, siteAllowed } = MiddleClickLearning;
+  const data = await chrome.storage.local.get(SITE_PERMISSION_KEY);
+  return siteAllowed(data[SITE_PERMISSION_KEY], origin);
+}
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type !== "getSiteLearningPermission" && message?.type !== "grantSiteLearningPermission") return;
+  const origin = MiddleClickLearning.webUrl(sender.url)?.origin;
+  if (!Number.isInteger(sender.tab?.id) || sender.frameId !== 0 || sender.tab.incognito || !origin || message.origin !== origin) {
+    respond({ ok: false, allowed: false }); return;
+  }
+  if (message.type === "grantSiteLearningPermission") {
+    // A grant is accepted only after the site's scope and automatic discovery
+    // behavior have been explicitly confirmed in the content-script dialog.
+    if (message.confirmed !== true) { respond({ ok: false }); return; }
+    updateSitePermission(origin, true).then(ok => respond({ ok }));
+  } else {
+    isSiteLearningAllowed(origin).then(allowed => respond({ ok: true, allowed }), () => respond({ ok: false, allowed: false }));
+  }
+  return true;
+});
 
 function updateLearning(transform) {
   learningWrites = learningWrites.then(async () => {
@@ -224,4 +271,4 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 const navigationProbes = MiddleClickProbe.install({ chrome, learning: MiddleClickLearning, save: updateLearning,
-  open: createBackgroundTabNextToSource, cancelPassive: cancelLearning });
+  open: createBackgroundTabNextToSource, cancelPassive: cancelLearning, isSiteAllowed: isSiteLearningAllowed });

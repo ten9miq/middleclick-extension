@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  function install({ chrome, learning, save, open, cancelPassive }) {
+  function install({ chrome, learning, save, open, cancelPassive, isSiteAllowed }) {
     const pending = new Map();
 
     function tell(tabId, message) {
@@ -113,10 +113,10 @@
         if (record) { remove(record); feedback(record.tabId, "cancelled"); }
         return;
       }
-      if (message?.type !== "beginConfirmedNavigationProbe") return;
+      if (message?.type !== "beginSiteNavigationProbe") return;
       const source = learning.learnableUrl(message.sourceUrl);
       const document = learning.webUrl(sender.url);
-      if (message.confirmed !== true || !Number.isInteger(sender.tab?.id) || sender.frameId !== 0 || sender.tab.incognito ||
+      if (!Number.isInteger(sender.tab?.id) || sender.frameId !== 0 || sender.tab.incognito ||
         !source || source.origin !== document?.origin || typeof message.key !== "string" ||
         !message.key || message.key.length > 2048 || typeof message.entryKey !== "string") {
         respond({ ok: false, reason: "unavailable" }); return;
@@ -126,8 +126,12 @@
         origin: source.origin, key: message.key, entryKey: message.entryKey,
         documentId: sender.documentId, phase: "checking" };
       pending.set(record.tabId, record);
-      chrome.storage.local.get(learning.STORAGE_KEY).then(data => {
+      // Enforce the persisted exact-origin grant in the background on EVERY
+      // unknown target, rather than trusting a per-request confirmation flag.
+      Promise.all([chrome.storage.local.get(learning.STORAGE_KEY),
+        typeof isSiteAllowed === "function" ? isSiteAllowed(source.origin) : false]).then(([data, allowed]) => {
         if (pending.get(record.tabId) !== record) { respond({ ok: false, reason: "cancelled" }); return; }
+        if (!allowed) { remove(record); respond({ ok: false, reason: "permission-required" }); return; }
         const entries = learning.clean(data[learning.STORAGE_KEY]);
         if (entries.some(entry => entry.origin === record.origin && entry.key === record.key && entry.ambiguous)) {
           remove(record); respond({ ok: false, reason: "ambiguous" }); return;

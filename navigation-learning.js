@@ -2,6 +2,7 @@
   "use strict";
 
   const STORAGE_KEY = "middleclickLearnedNavigationV1";
+  const SITE_PERMISSION_KEY = "middleclickSiteLearningPermissionsV1";
   const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
   const MAX_ENTRIES = 500;
 
@@ -54,7 +55,29 @@
     return matches[0].url;
   }
 
-  const api = Object.freeze({ STORAGE_KEY, MAX_AGE_MS, MAX_ENTRIES, webUrl, learnableUrl, clean, remember, lookup });
+  function siteOrigins(value) {
+    if (value?.version !== 1 || !Array.isArray(value.origins)) return [];
+    return [...new Set(value.origins.filter(origin => {
+      if (typeof origin !== "string") return false;
+      const url = webUrl(origin);
+      return Boolean(url && url.origin === origin);
+    }))];
+  }
+
+  function siteAllowed(value, origin) {
+    return siteOrigins(value).includes(origin);
+  }
+
+  function setSiteAllowed(value, origin, allowed) {
+    const url = webUrl(origin);
+    if (!url || url.origin !== origin) throw new Error("Invalid site origin");
+    const origins = siteOrigins(value).filter(item => item !== origin);
+    if (allowed) origins.push(origin);
+    return { version: 1, origins: origins.sort() };
+  }
+
+  const api = Object.freeze({ STORAGE_KEY, SITE_PERMISSION_KEY, MAX_AGE_MS, MAX_ENTRIES,
+    webUrl, learnableUrl, clean, remember, lookup, siteOrigins, siteAllowed, setSiteAllowed });
   globalThis.MiddleClickLearning = api;
   if (typeof module !== "undefined") module.exports = api;
 })();

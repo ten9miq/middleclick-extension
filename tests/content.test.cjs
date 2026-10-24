@@ -8,6 +8,7 @@ const learning = require('../navigation-learning.js');
 const source = fs.readFileSync(path.join(__dirname, '../content.js'), 'utf8');
 const SVG = 'http://www.w3.org/2000/svg';
 const sprite = '/cdn/assets/icons-c6b5375eadec3cee.svg#codex-icon-folder-light-20';
+const flush = async () => { for (let i = 0; i < 35; i++) await Promise.resolve(); };
 
 // Only the DOM surface used by the content script. Browser integration is
 // checked separately; these events do not represent trusted mouse input.
@@ -53,7 +54,8 @@ class Element {
 }
 
 function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = false,
-  confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }) } = {}) {
+  confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }), siteAllowed = false,
+  savePermission = async () => ({ ok: true }) } = {}) {
   const listeners = new Map();
   const messages = [];
   const location = new URL(`https://${host}/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`);
@@ -80,7 +82,15 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
     window, top: topFrame ? window : {},
     MiddleClickFeedback: { show(reason) { notices.push(reason); } },
     chrome: { runtime: { id: 'extension', onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
-      sendMessage(message) { messages.push(message); return message.type === 'beginConfirmedNavigationProbe' ? acknowledge() : undefined; } }, storage: {
+      sendMessage(message) {
+        messages.push(message);
+        if (message.type === 'getSiteLearningPermission') return Promise.resolve({ ok: true, allowed: siteAllowed });
+        if (message.type === 'grantSiteLearningPermission') return savePermission().then(response => {
+          if (response.ok) siteAllowed = true;
+          return response;
+        });
+        return message.type === 'beginSiteNavigationProbe' ? acknowledge() : undefined;
+      } }, storage: {
       local: { get: async () => saved }, onChanged: { addListener(callback) { changed = callback; } },
     } },
     performance: { now: () => time },
@@ -309,6 +319,7 @@ test('equal navigation labels in different semantic sections get distinct stable
   h.dispatch(recent, 'click', { button: 0, isTrusted: true });
   assert.equal(h.messages.pop().key, keys[1]);
   h.dispatch(top);
+  await flush();
   assert.equal(prompts, 1);
   assert.equal(h.notices.includes('ambiguous'), false);
   const entries = learning.remember([], h.location.origin, keys[1], h.location.origin + '/new-chat');
@@ -360,22 +371,22 @@ test('GET form buttons and submit inputs still resolve without submitting; POST 
   }
 });
 
-test('cancelling initial confirmation never registers a probe or invokes the target', async () => {
+test('cancelling initial site consent never grants permission, registers a probe or clicks', async () => {
   const { icon, button } = iconButton({ 'data-item-id': 'initial', 'aria-label': 'Initial navigation' });
   let prompts = 0;
   let clicks = 0;
   button.click = () => clicks++;
   const h = harness('example.com', { root: rootOf(button), topFrame: true,
-    confirm(text) { prompts++; assert.match(text, /Initial navigation/); return false; } });
+    confirm(text) { prompts++; assert.match(text, /https:\/\/example.com/); assert.match(text, /未学習/); return false; } });
   h.dispatch(icon, 'pointerdown');
   h.dispatch(icon, 'mousedown');
-  await Promise.resolve();
+  await flush();
   assert.equal(prompts, 1);
   assert.equal(clicks, 0);
-  assert.equal(h.messages.length, 0);
+  assert.deepEqual(h.messages.map(message => message.type), ['getSiteLearningPermission']);
 });
 
-test('confirmed discovery clicks once, only after the observer acknowledges consent', async () => {
+test('initial site consent is saved before registration and discovery clicks only after acknowledgement', async () => {
   const { icon, button } = iconButton({ 'data-item-id': 'initial', 'aria-label': 'Initial navigation' });
   let acknowledge;
   let clicks = 0;
@@ -385,14 +396,95 @@ test('confirmed discovery clicks once, only after the observer acknowledges cons
     acknowledge: () => response });
   h.dispatch(icon, 'pointerdown');
   h.dispatch(icon, 'mousedown');
-  await Promise.resolve();
+  await flush();
   assert.equal(clicks, 0);
-  assert.equal(h.messages.length, 1);
-  assert.equal(h.messages[0].type, 'beginConfirmedNavigationProbe');
-  assert.equal(h.messages[0].confirmed, true);
+  assert.deepEqual(h.messages.map(message => message.type), [
+    'getSiteLearningPermission', 'grantSiteLearningPermission', 'beginSiteNavigationProbe',
+  ]);
+  assert.equal(h.messages[1].confirmed, true);
+  assert.equal(h.messages[1].origin, 'https://example.com');
   acknowledge({ ok: true });
-  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await flush();
   assert.equal(clicks, 1);
+});
+
+test('one site consent covers a different previously unlearned control on that site', async () => {
+  const first = iconButton({ 'data-item-id': 'first', 'aria-label': 'First' });
+  const second = iconButton({ 'data-item-id': 'second', 'aria-label': 'Second' });
+  first.button.parentElement.children.push(second.button);
+  second.button.parentElement = first.button.parentElement;
+  let prompts = 0;
+  const clicked = [];
+  first.button.click = () => clicked.push('first');
+  second.button.click = () => clicked.push('second');
+  const h = harness('example.com', { root: rootOf(first.button), topFrame: true,
+    confirm() { prompts++; return true; } });
+  h.dispatch(first.icon); await flush();
+  h.receive({ type: 'navigationProbeFeedback', reason: 'opened' });
+  h.dispatch(second.icon); await flush();
+  assert.equal(prompts, 1);
+  assert.deepEqual(clicked, ['first', 'second']);
+  assert.equal(h.messages.filter(message => message.type === 'grantSiteLearningPermission').length, 1);
+  assert.equal(h.messages.filter(message => message.type === 'beginSiteNavigationProbe').length, 2);
+});
+
+test('a persisted site grant skips confirmation in a fresh document with an unknown control', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'never-learned' });
+  let clicks = 0;
+  let prompts = 0;
+  button.click = () => clicks++;
+  const h = harness('example.com', { root: rootOf(button), topFrame: true, siteAllowed: true,
+    confirm() { prompts++; return false; } });
+  h.dispatch(icon); await flush();
+  assert.equal(prompts, 0);
+  assert.equal(clicks, 1);
+  assert.deepEqual(h.messages.map(message => message.type), ['getSiteLearningPermission', 'beginSiteNavigationProbe']);
+});
+
+test('failure to persist site consent never starts discovery or clicks a target', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'first' });
+  let clicks = 0;
+  button.click = () => clicks++;
+  const h = harness('example.com', { root: rootOf(button), topFrame: true, confirm: () => true,
+    savePermission: async () => ({ ok: false }) });
+  h.dispatch(icon); await flush();
+  assert.equal(clicks, 0);
+  assert.equal(h.messages.some(message => message.type === 'beginSiteNavigationProbe'), false);
+  assert.equal(h.notices.at(-1), 'permission-save-failed');
+});
+
+test('another user action while consent is being registered cancels the original discovery', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'first' });
+  let acknowledge;
+  let clicks = 0;
+  button.click = () => clicks++;
+  const response = new Promise(resolve => { acknowledge = resolve; });
+  const h = harness('example.com', { root: rootOf(button), topFrame: true, siteAllowed: true,
+    acknowledge: () => response });
+  h.dispatch(icon); await flush();
+  h.dispatch(icon, 'keydown', { isTrusted: true });
+  acknowledge({ ok: true }); await flush();
+  assert.equal(clicks, 0);
+});
+
+test('a late failed grant from a cancelled attempt does not clear a newer active discovery', async () => {
+  const items = ['first', 'second', 'third'].map(id => iconButton({ 'data-item-id': id }));
+  const nav = items[0].button.parentElement;
+  for (const item of items.slice(1)) { nav.children.push(item.button); item.button.parentElement = nav; }
+  const clicked = [];
+  items.forEach((item, index) => { item.button.click = () => clicked.push(index); });
+  let finishFirst;
+  let grants = 0;
+  const firstGrant = new Promise(resolve => { finishFirst = resolve; });
+  const h = harness('example.com', { root: rootOf(items[0].button), topFrame: true, confirm: () => true,
+    savePermission: () => ++grants === 1 ? firstGrant : Promise.resolve({ ok: true }) });
+  h.dispatch(items[0].icon); await flush();
+  h.dispatch(items[0].icon, 'keydown', { isTrusted: true });
+  h.dispatch(items[1].icon); await flush();
+  finishFirst({ ok: false }); await flush();
+  h.dispatch(items[2].icon); await flush();
+  assert.deepEqual(clicked, [1]);
+  assert.equal(h.notices.at(-1), 'busy');
 });
 
 test('rejected acknowledgements or changed source pages never execute the confirmed control', async () => {

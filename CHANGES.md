@@ -2,13 +2,14 @@
 
 ## Unreleased
 
+- Persist explicit exact-origin site consent, allowing other eligible unknown controls on that site to be discovered without another prompt. Add a per-site revocation menu, separate from mapping deletion, and enforce consent in the background for every discovery.
 - Handle confirmed same-URL history pushes (including New chat from ChatGPT home) and verify restoration to the original history entry before opening a tab. Ignore same-entry state updates and stale asynchronous observations.
 - Distinguish equal control labels using stable section context when identities collide, including ChatGPT's two New chat buttons. Keep indistinguishable controls blocked and preserve existing unambiguous mappings.
-- Add per-target confirmation for initial middle-click discovery: after approval, click once, restore the source page, and open the observed destination in a background tab.
+- Ask for site-wide permission before initial middle-click discovery: after saving the grant, click once, restore the source page, and open the observed destination in a background tab.
 - Run local persistence and source restoration concurrently; open after restoration without waiting for storage, and update the source page's in-memory mapping immediately.
-- Add status feedback for cancellations, unsupported destinations, timeouts and errors. Unconfirmed discovery clicks remain disabled.
+- Add status feedback for cancellations, unsupported destinations, timeouts and errors. Discovery remains disabled without a saved site grant.
 - Replace ChatGPT fixed routes, title matching and fetch/XHR inspection with generic passive navigation learning and local persistence.
-- Learn identifiable controls from normal left clicks followed by same-origin SPA/hash or full-document navigation, without modifying page APIs. Initial discovery clicks require explicit per-target confirmation.
+- Learn identifiable controls from normal left clicks followed by same-origin SPA/hash or full-document navigation, without modifying page APIs. Unknown-target discovery requires explicitly saved site consent.
 - Retain up to 500 mappings for 90 days, reject ambiguous mappings, and add a context menu to forget mappings for a site.
 - Retain only the Codex mode initializer and the ChatGPT sidebar background-tab workaround as site-specific behavior.
 - Exclude SVG resources and global metadata; bound URL detection to the clicked control.

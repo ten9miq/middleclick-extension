@@ -35,6 +35,7 @@
   let lastHandledMiddle = { url: '', time: 0 };
   let lastProbeGesture = { control: null, time: 0 };
   let activeProbe = false;
+  let probeAttempt = 0;
 
   function normalizeText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -404,34 +405,49 @@
     if (window !== top || chrome.extension?.inIncognitoContext || !MiddleClickLearning.learnableUrl(location.href)) {
       notify('unavailable'); return true;
     }
-    const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent).slice(0, 120);
-    // Explicit per-target consent is mandatory. Neither showing this prompt nor
-    // cancelling it may invoke the target's handler or start navigation.
-    if (typeof window.confirm !== 'function' || !window.confirm(
-      `「${label || 'この対象'}」の左クリック動作を実行して移動先を学習しますか？\n\n` +
-      '移動後に元のページへ戻り、移動先を別タブで開きます。\n' +
-      'クリックに伴う送信・削除・データ変更は、ページを戻しても取り消せません。')) {
-      lastProbeGesture.time = Date.now();
-      return true;
-    }
-    lastProbeGesture.time = Date.now();
-    if (uniqueLearningKey(control) !== key || !control.isConnected) { notify('unavailable'); return true; }
     const sourceUrl = location.href;
+    const origin = location.origin;
+    const attempt = ++probeAttempt;
     activeProbe = true;
-    Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'beginConfirmedNavigationProbe', confirmed: true, key,
-      sourceUrl, entryKey: window.navigation?.currentEntry?.key || '' })).then(response => {
+    const stillCurrent = () => activeProbe && probeAttempt === attempt && location.href === sourceUrl &&
+      control.isConnected && uniqueLearningKey(control) === key;
+    Promise.resolve().then(async () => {
+      const permission = await chrome.runtime.sendMessage({ type: 'getSiteLearningPermission', origin });
+      if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
+      if (!permission?.ok) { activeProbe = false; notify('unavailable'); return; }
+      if (!permission.allowed) {
+        // This first consent is explicitly SITE-wide, including future unknown
+        // targets. No target is clicked unless this grant is saved successfully.
+        if (typeof window.confirm !== 'function' || !window.confirm(
+          `${origin} で自動学習を許可しますか？\n\n` +
+          '今後このサイトでは、未学習の項目も確認なしで左クリック動作を実行して移動先を調べます。\n' +
+          '元のページへ戻ってから移動先を別タブで開き、次回から学習結果を使います。\n\n' +
+          'クリックに伴う送信・削除・データ変更は、ページを戻しても取り消せません。\n' +
+          '許可はこのサイトに保存され、右クリックメニューから取り消せます。')) {
+          activeProbe = false; lastProbeGesture.time = Date.now(); return;
+        }
+        lastProbeGesture.time = Date.now();
+        if (!stillCurrent()) { activeProbe = false; notify('unavailable'); return; }
+        const grant = await chrome.runtime.sendMessage({ type: 'grantSiteLearningPermission', origin, confirmed: true });
+        if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
+        if (!grant?.ok) { activeProbe = false; notify('permission-save-failed'); return; }
+      }
+      if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
+      return chrome.runtime.sendMessage({ type: 'beginSiteNavigationProbe', key,
+        sourceUrl, entryKey: window.navigation?.currentEntry?.key || '' });
+    }).then(response => {
+      if (!response || probeAttempt !== attempt || !activeProbe) return;
       if (!response?.ok) { activeProbe = false; notify(response?.reason || 'unavailable'); return; }
-      if (location.href !== sourceUrl || !control.isConnected || uniqueLearningKey(control) !== key) {
+      if (!stillCurrent()) {
         activeProbe = false;
         sendMessage({ type: 'cancelNavigationLearning' });
         notify('unavailable');
         return;
       }
       notify('checking');
-      // This is the sole generic discovery click, after the user's confirmation
-      // for this exact control and the background observer's acknowledgement.
+      // The origin grant is rechecked by the background before every discovery.
       control.click();
-    }).catch(() => { activeProbe = false; notify('unavailable'); });
+    }).catch(() => { if (probeAttempt === attempt) { activeProbe = false; notify('unavailable'); } });
     return true;
   }
 
@@ -490,9 +506,11 @@
       if (learnedRevision === initialRevision) learnedEntries = clean(data[STORAGE_KEY]);
     }).catch(() => {});
 
-    const cancel = () => sendMessage({ type: 'cancelNavigationLearning' });
+    const cancel = () => { activeProbe = false; probeAttempt++; sendMessage({ type: 'cancelNavigationLearning' }); };
     document.addEventListener('click', e => {
       if (!e.isTrusted) return;
+      activeProbe = false;
+      probeAttempt++;
       const control = clickControl(e);
       if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || codexDestination(control) || staticUrl(e, control)) {
         cancel();

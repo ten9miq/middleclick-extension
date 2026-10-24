@@ -44,3 +44,15 @@ test('storage is bounded and malformed or duplicate records cannot resolve', () 
   assert.deepEqual(learning.clean({ version: 2, entries }, now), []);
   assert.deepEqual(learning.clean({ version: 1, entries: [null, { key: 'bad' }] }, now), []);
 });
+
+test('site consent persists independently and matches exact origins without subdomain or port inheritance', () => {
+  const granted = learning.setSiteAllowed(null, origin, true);
+  const reloaded = JSON.parse(JSON.stringify(granted));
+  assert.equal(learning.siteAllowed(reloaded, origin), true);
+  for (const other of ['http://example.com', 'https://sub.example.com', 'https://example.com:8443', 'https://other.example']) {
+    assert.equal(learning.siteAllowed(reloaded, other), false, other);
+  }
+  assert.equal(learning.siteAllowed(learning.setSiteAllowed(reloaded, origin, false), origin), false);
+  assert.equal(learning.siteAllowed({ version: 2, origins: [origin] }, origin), false);
+  assert.deepEqual(learning.siteOrigins({ version: 1, origins: [null, 'javascript:test', origin, origin, origin + '/path'] }), [origin]);
+});
