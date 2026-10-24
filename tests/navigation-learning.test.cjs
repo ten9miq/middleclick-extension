@@ -1,0 +1,46 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const learning = require('../navigation-learning.js');
+const origin = 'https://example.com';
+const now = 1_000_000_000;
+
+test('learned routes serialize, reload, expire after 90 days and stay origin scoped', () => {
+  const entries = learning.remember([], origin, 'report', origin + '/report', now);
+  const saved = JSON.parse(JSON.stringify({ version: 1, entries }));
+  const loaded = learning.clean(saved, now + 1);
+  assert.equal(learning.lookup(loaded, origin, 'report', now + 1), origin + '/report');
+  assert.equal(learning.lookup(loaded, 'https://other.example', 'report', now + 1), null);
+  assert.equal(learning.lookup(loaded, origin, 'report', now + learning.MAX_AGE_MS + 1), null);
+});
+
+test('different destinations for one identity remain blocked until reset or expiry', () => {
+  let entries = learning.remember([], origin, 'report', origin + '/one', now);
+  entries = learning.remember(entries, origin, 'report', origin + '/two', now + 1);
+  entries = learning.remember(entries, origin, 'report', origin + '/one', now + 2);
+  assert.equal(learning.lookup(entries, origin, 'report', now + 3), null);
+  assert.equal(entries[0].ambiguous, true);
+  assert.equal(entries[0].url, null);
+  entries = learning.remember(entries, origin, 'report', origin + '/new', now + learning.MAX_AGE_MS + 3);
+  assert.equal(learning.lookup(entries, origin, 'report', now + learning.MAX_AGE_MS + 3), origin + '/new');
+});
+
+test('unsafe, cross-origin, authentication and sensitive-query destinations are rejected', () => {
+  for (const url of ['javascript:alert(1)', 'data:text/html,test', 'file:///test', 'https://other.example/page',
+    'https://user:password@example.com/', origin + '/oauth/callback', origin + '/logout',
+    origin + '/page?access_token=secret', origin + '/page?session_id=private']) {
+    assert.equal(learning.remember([], origin, 'key', url, now).length, 0, url);
+  }
+});
+
+test('storage is bounded and malformed or duplicate records cannot resolve', () => {
+  let entries = [];
+  for (let index = 0; index <= learning.MAX_ENTRIES; index++) {
+    entries = learning.remember(entries, origin, String(index), origin + '/' + index, now + index);
+  }
+  assert.equal(entries.length, learning.MAX_ENTRIES);
+  assert.equal(entries.some(entry => entry.key === '0'), false);
+  const record = entries[0];
+  assert.equal(learning.lookup([record, record], origin, record.key, now + learning.MAX_ENTRIES), null);
+  assert.deepEqual(learning.clean({ version: 2, entries }, now), []);
+  assert.deepEqual(learning.clean({ version: 1, entries: [null, { key: 'bad' }] }, now), []);
+});

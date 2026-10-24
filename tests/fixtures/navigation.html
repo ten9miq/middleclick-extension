@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" data-icon-sprite-url="/icons.svg">
+<meta charset="utf-8">
+<title>MiddleClick+ generic learning fixture</title>
+<style>body { font: 18px sans-serif; padding: 32px; } nav { display: flex; gap: 12px; } button, a { padding: 14px; }</style>
+<h1>Generic navigation fixture</h1>
+<nav aria-label="Fixture navigation">
+  <button type="button" data-item-id="spa">SPA destination</button>
+  <button type="button" data-item-id="document">Document destination</button>
+  <button type="button" data-item-id="unknown">Unresolved button</button>
+  <a href="/native">Native link</a>
+</nav>
+<p id="status"></p>
+<script>
+  window.fixtureRoute = '/spa';
+  document.querySelector('[data-item-id="spa"]').addEventListener('click', () => {
+    history.pushState(null, '', window.fixtureRoute);
+    document.querySelector('#status').textContent = 'SPA route opened';
+  });
+  document.querySelector('[data-item-id="document"]').addEventListener('click', () => {
+    location.assign('/document');
+  });
+</script>
+</html>

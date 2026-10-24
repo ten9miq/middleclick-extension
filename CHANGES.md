@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Replace ChatGPT fixed routes, title matching and fetch/XHR inspection with generic passive navigation learning and local persistence.
+- Learn identifiable controls from normal left clicks followed by same-origin SPA/hash or full-document navigation, without executing discovery clicks or modifying page APIs.
+- Retain up to 500 mappings for 90 days, reject ambiguous mappings, and add a context menu to forget mappings for a site.
+- Retain only the Codex mode initializer and the ChatGPT sidebar background-tab workaround as site-specific behavior.
+- Exclude SVG resources and global metadata; bound URL detection to the clicked control.
+- Add `storage` and `webNavigation` permissions and regression tests for persistence, ambiguity, navigation attribution and generic controls.
+
 ## 1.2.3
 
 - Keep extension-created middle-click tabs in the source tab's group, while preserving background opening and placement directly to its right.

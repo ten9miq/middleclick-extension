@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.2.3。`background.js`、`content.js`、`chatgpt-bridge.js`、`icons/logo.png` が直接参照される。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。バックグラウンド処理の回帰テストは `tests/background.test.cjs` にある。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.2.3。`background.js`、`navigation-learning.js`、`content.js`、`icons/logo.png` が直接参照される。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -98,12 +98,14 @@ MCP接続が9223とこのプロジェクトのworkspaceへ切り替わった証�
 - 通常の左クリックが従来どおり動く。通常のリンクの中クリックで重複タブが作られない。
 - 安全にURLを解決できる擬似リンクは、元タブの右隣のバックグラウンドタブに1つだけ開く。元タブの選択を保つ。
 - URLを解決できないボタンは何もしない。短時間の連続中クリック、必要に応じてShadow DOMも確認する。
-- ChatGPTが対象なら新規チャット、会話、プロジェクト、Plugins / Schedulesの該当項目を確認する。安全な閲覧リンクに限定し、対象UIが存在しない場合は未確認とする。
+- ChatGPT専用の固定ルートは廃止済み。URLのないボタンは通常の左クリックで学習してから中クリックを検証する。あなたのdotの遷移先は `/dots/home`。再読み込みや拡張の再起動後にも再利用できること、学習前・重複・競合時は何も開かないことを確認する。Codexは学習不要で、新タブのURLが `/`、Codexボタンの `data-selected` と `history.state.usr.sidebarProductMode === 'codex'` を確認する。SVG素材のURLが開かないことも確認する。安全な閲覧リンクに限定し、対象UIが存在しない場合は未確認とする。
 - ページと対象拡張service workerのConsoleを確認する。URL・stackの拡張IDでサイト／対象拡張／他拡張を区別する。発生元不明は「未特定」。
 
 現行 `click` の引数には中ボタン指定がない。物理中クリックの受入はユーザーが専用Chromeで操作し、前後のsnapshot・タブ一覧・選択状態をMCPで観測する。DOM合成イベントやservice workerの直接呼び出しを物理中クリック成功の代わりにしない。タブの順序・active状態が一覧から不明なら、確認済み対象service workerの読み取りで `chrome.tabs.query` 等を使い、書き換えない。
 
-Codexによる自動検証には `scripts/synthetic-middle-click.js` を使う。最新snapshotの上部「新しいチャット」、会話リンク、またはプロジェクト行のUIDを `evaluate_script` のargsへ渡し、sourcePathにこのファイルの絶対パス、formatに `function` を指定する。スクリプトは実DOMのhrefまたはプロジェクトIDから期待パスを返す。対象はサイドバー内の閲覧用ナビゲーションに限定し、アクションメニューや送信ボタンは対象にしない。これはMCPの公開ツール経由でDOMイベントを送るテストであり、`isTrusted=false`。OSの物理入力やブラウザー標準の中クリック処理を検証するものではない。
+Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` を使う。HTTP(S)ページの最新snapshotから安全な閲覧用リンク・ボタンのUIDを `evaluate_script` のargsへ渡し、sourcePathにこのファイルの絶対パス、formatに `function` を指定する。子SVG・画像があればイベント送信先にする。期待URLは実際の通常左クリック等から別途確認し、このスクリプトでサイト固有のルートを推測しない。フォームやアクションメニューは対象にしない。これは `isTrusted=false` の合成中ボタンイベントであり、学習の開始やOSの物理入力、ブラウザー標準の中クリック処理を検証するものではない。
+
+汎用学習用のローカルページは `node tests/fixtures/server.cjs` で起動する。表示されたループバックURLを専用Chromeの新しいタブで開き、SPA destination／Document destinationをMCPの通常clickで左クリックして学習する。再読み込み・拡張の再起動後に合成中クリックし、保存結果の再利用を確認する。Unresolved buttonは学習前後とも無反応であることを確認する。検証後は作成したタブを閉じ、サーバーをCtrl+Cで停止する。専用Chromeからサーバーに接続できない場合、サンドボックスのネットワーク分離を確認する。
 
 操作前後に、確認済み対象service workerから `chrome.tabs.query({currentWindow:true})` を読み取り、ID・index・groupId・activeを比較する。増加が1タブ、同じgroupId、元タブの右隣、元タブactive=true／新タブactive=falseを確認する。元タブがグループ未所属なら新タブも未所属であることを確認する。拡張の関数や `tabs.create` を直接呼んで結果を作ることはしない。
 
@@ -114,8 +116,9 @@ Gitルートで実行する。npm scriptsは存在しないため作らず、以
 ```powershell
 node --check background.js
 node --check content.js
-node --check chatgpt-bridge.js
-node --test tests/background.test.cjs
+node --check navigation-learning.js
+node --check scripts/synthetic-middle-click.js
+node --test tests/*.test.cjs
 Get-Content manifest.json -Raw | ConvertFrom-Json | Out-Null
 $tokens = $null; $errors = $null
 [System.Management.Automation.Language.Parser]::ParseFile(
@@ -125,6 +128,14 @@ git diff --check
 ```
 
 各コマンドの終了コードを確認する。構文検査成功はブラウザー動作の成功を意味しない。manifest参照先の実在も確認する。スクリーンショット、Console、認証情報、私的本文やプロファイルをGitへ追加しない。保存が必要ならGit管理外に置く。
+
+## 汎用学習への変更の確認記録（2026-10-24）
+
+- Nodeの自動テスト41件、JS構文、manifest参照先とISOLATED構成、Git差分検査が成功。
+- 専用Chromeで「あなたのdot」は学習前の合成中クリックでは何も開かず、MCPの通常左クリックで `/dots/home` を学習した。拡張とページの再読み込み後、合成中クリックで保存結果を再利用した。Codexは新タブの選択状態と履歴状態がcodexであることを確認。
+- ChatGPT以外のループバックfixtureでSPA遷移とページ全体の遷移を通常左クリックから学習し、拡張再読み込み後も再利用できた。合成中クリックで増加は1タブ、元タブの右隣、新タブactive=false・元タブactive=trueを確認。
+- 同じfixtureボタンを別URLへ左クリック遷移させると競合記録になり、次の合成中クリックでは何も開かなかった。検証用の保存データとタブを除去し、サーバーを停止した。
+- fixtureと対象service workerでwarn/errorは0件。通常の左クリックはMCP操作、中クリックは `isTrusted=false` の合成イベントであり、この変更に対する物理中クリック・ブラウザー再起動の実操作は未検証。再起動相当の保存再読込は単体テストと拡張再読み込みで確認した。
 
 ## 初回確認記録（2026-10-18）
 

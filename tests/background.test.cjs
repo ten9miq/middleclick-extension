@@ -20,6 +20,7 @@ function harness({ source, failCreate = false, failGroup = false, removeSource =
     runtime: { onInstalled: noopEvent, onMessage: noopEvent },
     tabs: {
       onCreated: noopEvent,
+      onRemoved: noopEvent,
       async get(id) {
         if (removeSource || !tabs.has(id)) throw new Error('Tab closed');
         return { ...tabs.get(id) };
@@ -51,7 +52,10 @@ function harness({ source, failCreate = false, failGroup = false, removeSource =
       }
     }
   };
+  chrome.webNavigation = { onHistoryStateUpdated: noopEvent, onReferenceFragmentUpdated: noopEvent,
+    onCommitted: noopEvent, onErrorOccurred: noopEvent };
   const context = vm.createContext({ chrome, URL, setTimeout, clearTimeout, console: { warn(...args) { calls.warnings.push(args); } } });
+  context.importScripts = file => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
   vm.runInContext(sourceCode, context);
   return { calls, tabs, open: snapshot => context.createBackgroundTabNextToSource('https://chatgpt.com/', snapshot) };
 }

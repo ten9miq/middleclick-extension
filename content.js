@@ -25,43 +25,20 @@
   ];
 
   const DATA_URL_KEY = /(?:^|[-_])(?:url|href|link|route|path|destination|permalink|uri|navigate|nav)(?:$|[-_])/i;
-  const CHATGPT_BRIDGE_SOURCE = "middleclick-plus-chatgpt-bridge-v1";
-  const CHATGPT_PROJECT_ID_RE = /g-p-[0-9a-z-]+/i;
-  const CHATGPT_CONVERSATION_PATH_RE = /\/c\/([0-9a-f-]{20,})(?:[/?#]|$)/i;
-  const CHATGPT_PROJECT_PATH_RE = /\/g\/(g-p-[0-9a-z-]+)\/project(?:[/?#]|$)/i;
 
-  const CHATGPT_FIXED_ROUTES = new Map([
-    ["chatgpt", "/"],
-    ["home", "/"],
-    ["\u30db\u30fc\u30e0", "/"],
-    ["new chat", "/"],
-    ["start new chat", "/"],
-    ["\u65b0\u3057\u3044\u30c1\u30e3\u30c3\u30c8", "/"],
-    ["\u65b0\u898f\u30c1\u30e3\u30c3\u30c8", "/"],
-    ["plugins", "/plugins"],
-    ["\u30d7\u30e9\u30b0\u30a4\u30f3", "/plugins"],
-    ["schedule", "/schedules"],
-    ["scheduled", "/schedules"],
-    ["schedules", "/schedules"],
-    ["\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb", "/schedules"],
-    ["\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u6e08\u307f", "/schedules"]
-  ]);
-
-  const chatGPTMappings = new Map();
+  const CLICKABLE_SELECTOR = 'a, area, button, input[type="button"], input[type="submit"], input[type="image"], [role="link"], [role="button"], [onclick], [tabindex]';
+  const STABLE_DATA_KEY = /^data-(?:[a-z0-9]+-)*(?:id|key|destination|route|action|target|testid)$/i;
+  const RESOURCE_DATA_KEY = /(?:^|-)(?:icon|sprite|image|thumbnail|avatar|asset|background)(?:-|$)/i;
+  let learnedEntries = [];
   let requestSequence = 0;
-  let lastHandledMiddle = { url: "", time: 0 };
+  let lastHandledMiddle = { url: '', time: 0 };
 
   function normalizeText(value) {
-    return String(value ?? "").replace(/\s+/g, " ").trim();
-  }
-
-  function normalizeKey(value) {
-    return normalizeText(value).toLocaleLowerCase();
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
   }
 
   function isChatGPTHost() {
-    const host = location.hostname.toLowerCase();
-    return host === "chatgpt.com" || host === "www.chatgpt.com";
+    return /^(www\.)?chatgpt\.com$/i.test(location.hostname);
   }
 
   function hasMods(e) {
@@ -156,12 +133,18 @@
     if (!el?.getAttribute) return null;
 
     const tag = el.tagName?.toLowerCase();
+    // Global document metadata (e.g. data-icon-sprite-url on <html>) is not
+    // a destination of an arbitrary descendant control.
+    if (tag === "html" || tag === "body") return null;
     if (tag === "a" || tag === "area") {
       const url = toWebUrl(el.getAttribute("href"));
       if (url) return url;
     }
 
     for (const attr of URL_ATTRS) {
+      // SVG <use>, <image>, etc. reference drawing resources, not click
+      // destinations. Keep SVG <a href> navigation and parent button/link URLs.
+      if (attr === "href" && el.namespaceURI === "http://www.w3.org/2000/svg" && tag !== "a") continue;
       const url = toWebUrl(el.getAttribute(attr));
       if (url) return url;
     }
@@ -169,7 +152,8 @@
     if (el.dataset) {
       for (const [key, value] of Object.entries(el.dataset)) {
         const normalizedKey = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
-        if (!DATA_URL_KEY.test(normalizedKey)) continue;
+        if (!DATA_URL_KEY.test(normalizedKey) || RESOURCE_DATA_KEY.test(normalizedKey)) continue;
+        if (!/^(?:https?:\/\/|\/|\.{1,2}\/|\?)/i.test(String(value).trim())) continue;
         const url = toWebUrl(value);
         if (url) return url;
       }
@@ -266,324 +250,182 @@
     return urls.size === 1 ? [...urls][0] : null;
   }
 
-  function chatGPTRouteFromValue(value) {
-    const raw = String(value ?? "").trim();
-    if (!raw) return null;
 
-    const projectPath = raw.match(CHATGPT_PROJECT_PATH_RE);
-    if (projectPath) return `/g/${projectPath[1]}/project`;
-
-    const conversationPath = raw.match(CHATGPT_CONVERSATION_PATH_RE);
-    if (conversationPath) return `/c/${conversationPath[1]}`;
-
-    const projectId = raw.match(CHATGPT_PROJECT_ID_RE);
-    if (projectId) return `/g/${projectId[0]}/project`;
-
-    return null;
+  function clickControl(e) {
+    return getEventElements(e).find(el => el.matches?.(CLICKABLE_SELECTOR)) || null;
   }
 
-  function rememberChatGPT(name, route) {
-    const key = normalizeKey(name);
-    route = chatGPTRouteFromValue(route);
-    if (!key || !route) return;
+  function blockedControl(control, target) {
+    const editable = target?.closest?.('input, textarea, select, [contenteditable="true"]');
+    if (editable && !(editable.tagName.toLowerCase() === 'input' &&
+      /^(button|submit|image)$/i.test(editable.getAttribute('type') || 'text'))) return true;
+    return Boolean(control && (control.hasAttribute('disabled') || control.getAttribute('aria-disabled') === 'true' ||
+      control.hasAttribute('aria-haspopup')));
+  }
 
-    let urls = chatGPTMappings.get(key);
-    if (!urls) {
-      urls = new Set();
-      chatGPTMappings.set(key, urls);
+  function scopedElements(e, control) {
+    const elements = getEventElements(e);
+    if (control) return elements.slice(0, elements.indexOf(control) + 1);
+    const boundary = elements.findIndex(el => /^(nav|aside|main|body|html)$/i.test(el.tagName || ''));
+    return elements.slice(0, boundary < 0 ? 6 : Math.min(boundary, 6));
+  }
+
+  function staticUrl(e, control = clickControl(e)) {
+    if (blockedControl(control, e.target)) return null;
+    const elements = scopedElements(e, control);
+    for (const element of elements) {
+      const url = urlFromElementAttributes(element);
+      if (url) return url;
     }
-    urls.add(route);
+    const formUrl = urlFromGetForm(e.target);
+    if (formUrl) return formUrl;
+    return uniqueDescendantUrl(control || elements[0]);
   }
 
-  function lookupChatGPT(name) {
-    const key = normalizeKey(name);
+  function codexDestination(control) {
+    if (!isChatGPTHost() || control?.getAttribute('data-sidebar-destination') !== 'builtin:codex') return null;
+    return toWebUrl('/#middleclick-plus-codex');
+  }
+
+  function fingerprint(control) {
+    if (!control || blockedControl(control, control) || control.closest('form') || control.form) return null;
+    const attrs = [];
+    for (const attr of control.attributes ?? []) {
+      if (attr.name !== 'id' && !STABLE_DATA_KEY.test(attr.name)) continue;
+      if (RESOURCE_DATA_KEY.test(attr.name)) continue;
+      const value = normalizeText(attr.value);
+      if (!value || value.length > 160 || /^(?:[:_]|radix-)/i.test(value)) continue;
+      attrs.push([attr.name, value]);
+    }
+    attrs.sort((a, b) => a[0].localeCompare(b[0]));
+    const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent);
+    if ((!label || label.length > 160) && !attrs.length) return null;
+    const region = control.parentElement?.closest?.('nav, aside, [role="navigation"]');
+    const context = region ? [region.tagName.toLowerCase(), region.getAttribute('aria-label') || '', region.getAttribute('id') || ''] : [];
+    const scope = attrs.length ? '*' : location.pathname + location.search;
+    const key = JSON.stringify(['v1', control.tagName.toLowerCase(), control.getAttribute('role') || '', attrs,
+      label.length <= 160 ? label : '', context, scope]);
+    return key.length <= 2048 ? key : null;
+  }
+
+  function uniqueLearningKey(control) {
+    const key = fingerprint(control);
     if (!key) return null;
-
-    const fixed = CHATGPT_FIXED_ROUTES.get(key);
-    if (fixed) return fixed;
-
-    const urls = chatGPTMappings.get(key);
-    if (!urls || urls.size !== 1) return null;
-    return [...urls][0];
-  }
-
-  function isChatGPTMenuControl(target) {
-    if (!(target instanceof Element)) return false;
-
-    if (target.closest('[aria-haspopup="menu"]')) return true;
-
-    const button = target.closest("button");
-    if (!button) return false;
-
-    const label = normalizeKey(button.getAttribute("aria-label") ?? button.getAttribute("title"));
-    return (
-      label === "more" ||
-      label === "options" ||
-      label === "\u305d\u306e\u4ed6" ||
-      label === "\u30aa\u30d7\u30b7\u30e7\u30f3" ||
-      label.includes("more options") ||
-      label.includes("\u305d\u306e\u4ed6\u306e\u30aa\u30d7\u30b7\u30e7\u30f3")
-    );
-  }
-
-  function isChatGPTSidebarTarget(target, event) {
-    if (!(target instanceof Element)) return false;
-
-    try {
-      if (target.closest([
-        ".sidebar-item",
-        "aside",
-        "nav",
-        '[data-testid*="sidebar"]',
-        '[data-testid*="history"]',
-        '[class*="sidebar"]',
-        '[id*="sidebar"]'
-      ].join(","))) return true;
-    } catch {
-      // Continue to geometry fallback.
+    const candidates = document.querySelectorAll(CLICKABLE_SELECTOR);
+    if (candidates.length > 1000) return null;
+    let matches = 0;
+    for (const candidate of candidates) {
+      if (fingerprint(candidate) === key && ++matches > 1) return null;
     }
-
-    return (
-      Number.isFinite(event?.clientX) &&
-      event.clientX >= 0 &&
-      event.clientX <= 440
-    );
-  }
-
-  function chatGPTCandidateTexts(target) {
-    const result = [];
-    const seen = new Set();
-    let element = target instanceof Element ? target : null;
-
-    for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
-      const values = [
-        element.getAttribute?.("aria-label"),
-        element.getAttribute?.("title"),
-        element.textContent
-      ];
-
-      for (const value of values) {
-        const text = normalizeText(value);
-        if (!text || text.length > 300) continue;
-        const key = normalizeKey(text);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        result.push(text);
-      }
-    }
-
-    return result;
-  }
-
-  function chatGPTUrlFromAttributes(target) {
-    let element = target instanceof Element ? target : null;
-
-    for (let depth = 0; element && depth < 8; depth++, element = element.parentElement) {
-      for (const attr of element.attributes ?? []) {
-        const route = chatGPTRouteFromValue(attr.value);
-        if (route) return route;
-      }
-    }
-
-    return null;
-  }
-
-  function resolveChatGPTUrl(e) {
-    if (!isChatGPTHost()) return null;
-    if (!isChatGPTSidebarTarget(e.target, e)) return null;
-    if (isChatGPTMenuControl(e.target)) return null;
-
-    const attrRoute = chatGPTUrlFromAttributes(e.target);
-    if (attrRoute) return toWebUrl(attrRoute);
-
-    for (const text of chatGPTCandidateTexts(e.target)) {
-      const route = lookupChatGPT(text);
-      if (route) return toWebUrl(route);
-    }
-
-    return null;
+    return matches === 1 ? key : null;
   }
 
   function resolveUrl(e) {
-    const elements = getEventElements(e);
-
-    for (const el of elements) {
-      const url = urlFromElementAttributes(el);
-      if (url) return url;
-    }
-
-    const chatGPTUrl = resolveChatGPTUrl(e);
-    if (chatGPTUrl) return chatGPTUrl;
-
-    const formUrl = urlFromGetForm(e.target);
-    if (formUrl) return formUrl;
-
-    for (const el of elements.slice(0, 8)) {
-      const url = uniqueDescendantUrl(el);
-      if (url) return url;
-    }
-
-    return null;
+    const control = clickControl(e);
+    if (blockedControl(control, e.target)) return null;
+    const special = codexDestination(control);
+    if (special) return special;
+    const detected = staticUrl(e, control);
+    if (detected) return detected;
+    const key = uniqueLearningKey(control);
+    return key ? MiddleClickLearning.lookup(learnedEntries, location.origin, key) : null;
   }
 
-  function maybeOpen(url) {
-    if (!url) return;
-    chrome.runtime.sendMessage({
-      type: "maybeOpenOnMiddle",
-      url,
-      requestId: `${Date.now()}:${++requestSequence}`
-    });
+  function sendMessage(message) {
+    try { chrome.runtime.sendMessage(message)?.catch?.(() => {}); } catch { /* Extension may have reloaded. */ }
   }
 
-  function shouldForceExtensionBackground(e, nativeAnchor) {
-    if (!isChatGPTHost()) return false;
-    if (!isChatGPTSidebarTarget(e.target, e)) return false;
-    if (isChatGPTMenuControl(e.target)) return false;
+  function extensionMiddleUrl(e) {
+    const native = findNativeAnchor(e);
+    if (native && toWebUrl(native.getAttribute('href'))) {
+      // Retain the small ChatGPT workaround for foreground sidebar tabs.
+      if (!isChatGPTHost() || !native.closest('nav, aside, [class*="sidebar"], [id*="sidebar"]')) return null;
+    }
+    return resolveUrl(e);
+  }
 
-    // ChatGPT sometimes handles sidebar navigation itself even when an <a>
-    // exists. Letting the page/native handler win can create an active tab.
-    // For sidebar navigation we therefore route the middle click through the
-    // extension so chrome.tabs.create({ active: false }) is authoritative.
-    if (nativeAnchor && toWebUrl(nativeAnchor.getAttribute?.("href"))) return true;
-    return Boolean(resolveChatGPTUrl(e));
+  function suppressEvent(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
   }
 
   function handleResolvedMiddle(e) {
     if (e.button !== 1 || hasMods(e)) return;
-
-    const native = findNativeAnchor(e);
-    const forceBackground = shouldForceExtensionBackground(e, native);
-    if (!forceBackground && native && toWebUrl(native.getAttribute?.("href"))) return;
-
-    const url = forceBackground
-      ? (toWebUrl(native?.getAttribute?.("href")) || resolveChatGPTUrl(e) || resolveUrl(e))
-      : resolveUrl(e);
+    const url = extensionMiddleUrl(e);
     if (!url) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-
+    suppressEvent(e);
     const now = performance.now();
     if (lastHandledMiddle.url === url && now - lastHandledMiddle.time < 120) return;
     lastHandledMiddle = { url, time: now };
-    maybeOpen(url);
+    sendMessage({ type: 'maybeOpenOnMiddle', url, requestId: Date.now() + ':' + (++requestSequence) });
   }
 
   function suppressResolvedMiddle(e) {
-    if (e.button !== 1 || hasMods(e)) return;
-
-    const native = findNativeAnchor(e);
-    const forceBackground = shouldForceExtensionBackground(e, native);
-    if (!forceBackground && native && toWebUrl(native.getAttribute?.("href"))) return;
-
-    const url = forceBackground
-      ? (toWebUrl(native?.getAttribute?.("href")) || resolveChatGPTUrl(e) || resolveUrl(e))
-      : resolveUrl(e);
-    if (!url) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
+    if (e.button === 1 && !hasMods(e) && extensionMiddleUrl(e)) suppressEvent(e);
   }
 
-  // Native anchors are left entirely to the browser. Scheduling a fallback
-  // for them can duplicate tabs when redirects or site handlers change the URL
-  // observed by tabs.onCreated. ChatGPT sidebar anchors are handled below.
+  document.addEventListener('pointerdown', handleResolvedMiddle, { capture: true, passive: false });
+  document.addEventListener('mousedown', handleResolvedMiddle, { capture: true, passive: false });
+  document.addEventListener('mouseup', suppressResolvedMiddle, { capture: true, passive: false });
+  document.addEventListener('auxclick', suppressResolvedMiddle, { capture: true, passive: false });
 
-  document.addEventListener("pointerdown", handleResolvedMiddle, { capture: true, passive: false });
-  document.addEventListener("mousedown", handleResolvedMiddle, { capture: true, passive: false });
-  document.addEventListener("mouseup", suppressResolvedMiddle, { capture: true, passive: false });
-  document.addEventListener("auxclick", suppressResolvedMiddle, { capture: true, passive: false });
-
-  function learnChatGPTDomLinks(root) {
-    if (!isChatGPTHost() || !root?.querySelectorAll) return;
-
-    let anchors;
-    try {
-      anchors = root.querySelectorAll('a[href*="/c/"], a[href*="/g/"][href*="/project"]');
-    } catch {
-      return;
-    }
-
-    let count = 0;
-    for (const anchor of anchors) {
-      if (++count > 500) break;
-      const route = chatGPTRouteFromValue(anchor.getAttribute("href"));
-      if (!route) continue;
-
-      const names = [
-        anchor.getAttribute("aria-label"),
-        anchor.getAttribute("title"),
-        anchor.textContent,
-        anchor.closest?.('[data-testid], [role="link"], li, div')?.textContent
-      ];
-
-      for (const name of names) {
-        const text = normalizeText(name);
-        if (text && text.length <= 300) rememberChatGPT(text, route);
-      }
-    }
-  }
-
-  function setupChatGPTLearning() {
-    if (!isChatGPTHost() || window !== top) return;
-
-    window.addEventListener("message", (event) => {
-      if (event.source !== window) return;
-      const data = event.data;
-      if (data?.source !== CHATGPT_BRIDGE_SOURCE || data?.type !== "mapping") return;
-      if (typeof data.name !== "string" || typeof data.url !== "string") return;
-      rememberChatGPT(data.name, data.url);
+  function setupNavigationLearning() {
+    if (!/^https?:$/.test(location.protocol) || chrome.extension?.inIncognitoContext) return;
+    let revision = 0;
+    const { STORAGE_KEY, clean } = MiddleClickLearning;
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !Object.hasOwn(changes, STORAGE_KEY)) return;
+      revision++;
+      learnedEntries = clean(changes[STORAGE_KEY].newValue);
     });
+    const initialRevision = revision;
+    chrome.storage.local.get(STORAGE_KEY).then(data => {
+      if (revision === initialRevision) learnedEntries = clean(data[STORAGE_KEY]);
+    }).catch(() => {});
 
-    window.postMessage({ source: CHATGPT_BRIDGE_SOURCE, type: "ready" }, location.origin);
-
-    let domScanTimer = 0;
-    const scheduleDomScan = () => {
-      clearTimeout(domScanTimer);
-      domScanTimer = setTimeout(() => learnChatGPTDomLinks(document), 100);
-    };
-
-    if (document.documentElement) {
-      learnChatGPTDomLinks(document);
-      new MutationObserver(scheduleDomScan).observe(document.documentElement, {
-        childList: true,
-        subtree: true
-      });
-    } else {
-      document.addEventListener("DOMContentLoaded", () => {
-        learnChatGPTDomLinks(document);
-        if (document.documentElement) {
-          new MutationObserver(scheduleDomScan).observe(document.documentElement, {
-            childList: true,
-            subtree: true
-          });
-        }
-      }, { once: true });
-    }
-
-    document.addEventListener("click", (event) => {
-      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-      if (!isChatGPTSidebarTarget(event.target, event)) return;
-      if (isChatGPTMenuControl(event.target)) return;
-
-      const names = chatGPTCandidateTexts(event.target).slice(0, 4);
-      if (!names.length) return;
-
-      const before = location.pathname;
-      const delays = [50, 150, 350, 800, 1600];
-
-      for (const delay of delays) {
-        setTimeout(() => {
-          if (location.pathname === before) return;
-          const route = chatGPTRouteFromValue(location.pathname);
-          if (!route) return;
-          for (const name of names) rememberChatGPT(name, route);
-        }, delay);
+    const cancel = () => sendMessage({ type: 'cancelNavigationLearning' });
+    document.addEventListener('click', e => {
+      if (!e.isTrusted) return;
+      const control = clickControl(e);
+      if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || codexDestination(control) || staticUrl(e, control)) {
+        cancel();
+        return;
       }
+      const key = uniqueLearningKey(control);
+      if (!key || !MiddleClickLearning.learnableUrl(location.href)) { cancel(); return; }
+      sendMessage({ type: 'observeNavigationClick', key, sourceUrl: location.href });
     }, true);
+    document.addEventListener('submit', e => { if (e.isTrusted) cancel(); }, true);
+    document.addEventListener('keydown', e => { if (e.isTrusted) cancel(); }, true);
   }
 
-  setupChatGPTLearning();
+  function setupChatGPTRequestedMode() {
+    if (!isChatGPTHost() || window !== top || location.pathname !== "/") return;
+    if (location.hash !== "#middleclick-plus-codex") return;
+
+    // Only this known navigation control is activated, in the newly opened
+    // tab. Never execute arbitrary click handlers to discover a destination.
+    let attempts = 0;
+    const selectCodex = () => {
+      if (location.pathname !== "/") return;
+      const button = document.querySelector('button[data-sidebar-destination="builtin:codex"]');
+      if (document.readyState === "complete" && button) {
+        if (button.hasAttribute("data-selected")) {
+          if (location.hash === "#middleclick-plus-codex") {
+            history.replaceState(history.state, "", location.pathname + location.search);
+          }
+          return;
+        }
+        button.click();
+      }
+      // Hydration may attach handlers after the button first appears.
+      if (++attempts < 150) setTimeout(selectCodex, 100);
+      else console.warn("MiddleClick+: Codex mode selection timed out.");
+    };
+    selectCodex();
+  }
+
+  setupNavigationLearning();
+  setupChatGPTRequestedMode();
 })();
