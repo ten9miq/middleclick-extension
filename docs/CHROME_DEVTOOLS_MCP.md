@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.2.3。`background.js`、`navigation-learning.js`、`content.js`、`icons/logo.png` が直接参照される。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.2.3。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -97,15 +97,15 @@ MCP接続が9223とこのプロジェクトのworkspaceへ切り替わった証�
 - 実画面の対象要素をsnapshotとスクリーンショットで確認。比較の前後でURL、画面状態、スクロール、viewport（例: `emulate` の `viewport: "1280x800x1"`）を揃える。変更がない場合も基準状態を記録する。
 - 通常の左クリックが従来どおり動く。通常のリンクの中クリックで重複タブが作られない。
 - 安全にURLを解決できる擬似リンクは、元タブの右隣のバックグラウンドタブに1つだけ開く。元タブの選択を保つ。
-- URLを解決できないボタンは何もしない。短時間の連続中クリック、必要に応じてShadow DOMも確認する。
-- ChatGPT専用の固定ルートは廃止済み。URLのないボタンは通常の左クリックで学習してから中クリックを検証する。あなたのdotの遷移先は `/dots/home`。再読み込みや拡張の再起動後にも再利用できること、学習前・重複・競合時は何も開かないことを確認する。Codexは学習不要で、新タブのURLが `/`、Codexボタンの `data-selected` と `history.state.usr.sidebarProductMode === 'codex'` を確認する。SVG素材のURLが開かないことも確認する。安全な閲覧リンクに限定し、対象UIが存在しない場合は未確認とする。
+- URLを解決できない識別可能なボタンは、初回確認をキャンセルすればクリック・移動・タブ作成を行わない。承認後も移動先を取得できなければ案内を表示する。短時間の連続中クリック、必要に応じてShadow DOMも確認する。
+- ChatGPT専用の固定ルートは廃止済み。URLのないボタンは通常の左クリックで学習するか、初回中クリック時の確認を承認して学習する。確認キャンセル時は対象クリック・移動・タブ増加がゼロであること、承認後に元URLへ戻ってから別タブが開くこと、次回は確認なしで開くことを確認する。あなたのdotの遷移先は `/dots/home`。再読み込みや拡張の再起動後にも再利用できること、重複・競合時は自動クリックしないことを確認する。Codexは学習不要で、新タブのURLが `/`、Codexボタンの `data-selected` と `history.state.usr.sidebarProductMode === 'codex'` を確認する。安全な閲覧リンクに限定し、対象UIが存在しない場合は未確認とする。
 - ページと対象拡張service workerのConsoleを確認する。URL・stackの拡張IDでサイト／対象拡張／他拡張を区別する。発生元不明は「未特定」。
 
 現行 `click` の引数には中ボタン指定がない。物理中クリックの受入はユーザーが専用Chromeで操作し、前後のsnapshot・タブ一覧・選択状態をMCPで観測する。DOM合成イベントやservice workerの直接呼び出しを物理中クリック成功の代わりにしない。タブの順序・active状態が一覧から不明なら、確認済み対象service workerの読み取りで `chrome.tabs.query` 等を使い、書き換えない。
 
-Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` を使う。HTTP(S)ページの最新snapshotから安全な閲覧用リンク・ボタンのUIDを `evaluate_script` のargsへ渡し、sourcePathにこのファイルの絶対パス、formatに `function` を指定する。子SVG・画像があればイベント送信先にする。期待URLは実際の通常左クリック等から別途確認し、このスクリプトでサイト固有のルートを推測しない。フォームやアクションメニューは対象にしない。これは `isTrusted=false` の合成中ボタンイベントであり、学習の開始やOSの物理入力、ブラウザー標準の中クリック処理を検証するものではない。
+Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` を使う。HTTP(S)ページの最新snapshotから安全な閲覧用リンク・ボタンのUIDを `evaluate_script` のargsへ渡し、sourcePathにこのファイルの絶対パス、formatに `function` を指定する。子SVG・画像があればイベント送信先にする。期待URLは実際の通常左クリック等から別途確認し、このスクリプトでサイト固有のルートを推測しない。フォームやアクションメニューは対象にしない。これは `isTrusted=false` の合成中ボタンイベントであり、受動学習の信頼済み左クリック、OSの物理入力、ブラウザー標準の中クリック処理の代替ではない。確認付き探索の経路は、以下の対象・確認操作の制約内で検証できる。
 
-汎用学習用のローカルページは `node tests/fixtures/server.cjs` で起動する。表示されたループバックURLを専用Chromeの新しいタブで開き、SPA destination／Document destinationをMCPの通常clickで左クリックして学習する。再読み込み・拡張の再起動後に合成中クリックし、保存結果の再利用を確認する。Unresolved buttonは学習前後とも無反応であることを確認する。検証後は作成したタブを閉じ、サーバーをCtrl+Cで停止する。専用Chromeからサーバーに接続できない場合、サンドボックスのネットワーク分離を確認する。
+汎用学習用のローカルページは `node tests/fixtures/server.cjs` で起動する。表示されたループバックURLを専用Chromeの新しいタブで開く。通常clickによる受動学習と、初回中クリックの確認をキャンセル／承認した場合を分けて検証する。通常は自作fixtureに限って `evaluate_script` の `dialogAction` で確認を操作する。実サイトではユーザーが検証対象を明示した安全な閲覧用ナビゲーション（例:「新しいチャット」）に限定し、送信・編集・削除等は実行しない。SPA destination／Document destinationの両方で、元URLへの復帰・新タブ・保存・次回の確認省略を確認する。Unresolved buttonは承認しても対象のハンドラがないため、10秒後にURL変化なしの案内が表示される。物理入力の成功とは扱わない。検証後は作成したタブとfixture用の保存データを除去し、サーバーをCtrl+Cで停止する。
 
 操作前後に、確認済み対象service workerから `chrome.tabs.query({currentWindow:true})` を読み取り、ID・index・groupId・activeを比較する。増加が1タブ、同じgroupId、元タブの右隣、元タブactive=true／新タブactive=falseを確認する。元タブがグループ未所属なら新タブも未所属であることを確認する。拡張の関数や `tabs.create` を直接呼んで結果を作ることはしない。
 
@@ -117,6 +117,8 @@ Gitルートで実行する。npm scriptsは存在しないため作らず、以
 node --check background.js
 node --check content.js
 node --check navigation-learning.js
+node --check navigation-probe.js
+node --check feedback.js
 node --check scripts/synthetic-middle-click.js
 node --test tests/*.test.cjs
 Get-Content manifest.json -Raw | ConvertFrom-Json | Out-Null
@@ -129,7 +131,25 @@ git diff --check
 
 各コマンドの終了コードを確認する。構文検査成功はブラウザー動作の成功を意味しない。manifest参照先の実在も確認する。スクリーンショット、Console、認証情報、私的本文やプロファイルをGitへ追加しない。保存が必要ならGit管理外に置く。
 
-## 汎用学習への変更の確認記録（2026-10-24）
+## 同一URLへの新しいチャット遷移の修正（2026-10-24）
+
+- 修正前の専用ChromeでChatGPTホームの「新しいチャット」を確認承認付きで操作し、URLが `/` のまま履歴にpushとreplaceが発生することを読み取った。URL一致を除外する既存条件により、学習も新タブも発生しなかった。
+- 確認付き探索では同じURLでも履歴キーが変わった場合に限って遷移として扱うよう修正。復帰時もURLだけでなく元の履歴キーを照合する。キーが同じ状態更新は引き続き対象外。
+- 実ChatGPTホームで修正後に確認を承認し、元URL・元履歴キー・元タブactive=trueへの復帰、右隣にホームのタブが1つだけactive=falseで増加、ローカル保存を確認した。次回はダイアログを拒否する設定でも1タブ開いたため、保存済みURLの使用を確認できた。
+- 既存チャット画面の「新しいチャット」でも確認を承認し、元チャットのURL・履歴キーへの復帰と、右隣のバックグラウンドタブ1つを確認した。投稿・送信・既存チャットの編集／削除はしていない。
+- 自動テスト61件が成功。同一URLへのpush、履歴復帰待ち、同一履歴の状態更新を拒否すること、遅延した照合結果による別の移動先の上書きを防ぐことを検証した。中クリックは合成イベント、確認はMCPの自動操作であり、物理中クリックは未確認。
+
+## 確認付き初回学習と並行処理の確認記録（2026-10-24）
+
+- 同名ボタンの重複判定を修正した後は自動テスト57件が成功。異なるセクションの同名ボタンの識別、並び替え後のキー維持、区別できない重複の拒否を検証した。専用Chromeの実DOMを読み取り、2つの「新しいチャット」がどちらも識別可能で別々のキーになることを確認した。この修正に対する実サイト上のクリック・物理中クリックは未検証。
+- 自動テスト55件が成功。確認拒否時のクリックなし、承認・観測登録後のクリック1回、重複抑止、元履歴の照合、タイムアウト、保存失敗、復帰失敗を検証した。
+- 保存Promiseを未完了のまま保持するテストで、保存と復帰が開始され、保存完了前でも復帰確認後に新タブが開くことを確認した。保存済みデータの初期読込が遅れても、復帰先へ通知した新しいメモリー上の学習結果を消さないことも検証した。
+- 専用Chromeの自作fixtureで確認キャンセル時は対象クリック0回・URL不変・タブ増加なし。承認したSPA遷移ではクリック1回・元URLと履歴キーへ復帰・右隣のバックグラウンドタブ1つ・ローカル保存を確認した。次回はダイアログをキャンセルする設定でも1タブ開き、元ページのクリック回数は増えなかった。
+- ページ全体の遷移と `replaceState` による遷移でも元URLへの復帰後に1タブ開いた。全文書遷移時の評価スクリプトのcontext破棄は、タブ一覧・元URL・保存データで結果を別途確認した。
+- URL変化のないfixtureボタンでは10秒後に案内が表示されることをsnapshotとスクリーンショットで確認した。元ページと対象service workerのwarn/errorは0件。
+- 中ボタンイベントとダイアログの操作はMCPによる合成・自動操作。物理中クリック、実サイト上の確認後クリックは未検証。実サイト上の任意ボタンには確認付き探索を実行していない。
+
+## 汎用学習への変更の確認記録（2026-10-24、確認付き探索の導入前）
 
 - Nodeの自動テスト41件、JS構文、manifest参照先とISOLATED構成、Git差分検査が成功。
 - 専用Chromeで「あなたのdot」は学習前の合成中クリックでは何も開かず、MCPの通常左クリックで `/dots/home` を学習した。拡張とページの再読み込み後、合成中クリックで保存結果を再利用した。Codexは新タブの選択状態と履歴状態がcodexであることを確認。

@@ -28,6 +28,7 @@ class Element {
   get textContent() { return this.text || this.children.map(child => child.textContent).join(''); }
   getAttribute(name) { return this.attrs[name] ?? null; }
   hasAttribute(name) { return Object.hasOwn(this.attrs, name); }
+  get isConnected() { return rootOf(this).tagName.toLowerCase() === 'html'; }
   matches(selector) {
     return selector.split(',').some(part => {
       const match = part.trim().match(/^(\w+)?(?:\[([\w-]+)(?:(\*=|=)["']?([^"'\]]+)["']?)?\])?$/);
@@ -51,12 +52,16 @@ class Element {
   }
 }
 
-function harness(host = 'chatgpt.com', { entries = [], root = null } = {}) {
+function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = false,
+  confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }) } = {}) {
   const listeners = new Map();
   const messages = [];
   const location = new URL(`https://${host}/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`);
   let time = 1000;
   let changed;
+  const notices = [];
+  const runtimeListeners = [];
+  const window = { confirm };
   const document = {
     baseURI: location.href,
     addEventListener(type, callback) { listeners.set(type, callback); },
@@ -72,8 +77,10 @@ function harness(host = 'chatgpt.com', { entries = [], root = null } = {}) {
       entries() { return this.fields[Symbol.iterator](); }
     },
     document, MiddleClickLearning: learning,
-    window: {}, top: {}, // Subframe avoids unrelated sidebar-learning observers.
-    chrome: { runtime: { sendMessage(message) { messages.push(message); } }, storage: {
+    window, top: topFrame ? window : {},
+    MiddleClickFeedback: { show(reason) { notices.push(reason); } },
+    chrome: { runtime: { id: 'extension', onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
+      sendMessage(message) { messages.push(message); return message.type === 'beginConfirmedNavigationProbe' ? acknowledge() : undefined; } }, storage: {
       local: { get: async () => saved }, onChanged: { addListener(callback) { changed = callback; } },
     } },
     performance: { now: () => time },
@@ -92,7 +99,8 @@ function harness(host = 'chatgpt.com', { entries = [], root = null } = {}) {
     listeners.get(type)(event);
     return event;
   }
-  return { messages, dispatch, location, document, advance() { time += 200; },
+  return { messages, dispatch, location, document, notices, window, advance() { time += 200; },
+    receive(message, respond = () => {}) { runtimeListeners.forEach(fn => fn(message, { id: 'extension' }, respond)); },
     change(entries) { changed({ [learning.STORAGE_KEY]: { newValue: { version: 1, entries } } }, 'local'); } };
 }
 
@@ -280,6 +288,50 @@ test('duplicate controls and submit/menu/disabled controls are not learned', () 
   }
 });
 
+test('equal navigation labels in different semantic sections get distinct stable identities', async () => {
+  const top = new Element('button', { type: 'button' });
+  const recent = new Element('button', { type: 'button', 'aria-label': '新しいチャット' });
+  top.text = recent.text = '新しいチャット';
+  const section = new Element('section', { 'data-navigation-section-heading': 'Recent' }, [recent]);
+  const nav = new Element('nav', { 'aria-label': 'Home' }, [top, section]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  let prompts = 0;
+  const h = harness('example.com', { root, topFrame: true, confirm() { prompts++; return false; } });
+  h.dispatch(top, 'click', { button: 0, isTrusted: true });
+  h.dispatch(recent, 'click', { button: 0, isTrusted: true });
+  const keys = h.messages.filter(message => message.type === 'observeNavigationClick').map(message => message.key);
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.match(keys[1], /Recent/);
+  h.messages.length = 0;
+  // DOM order must not influence the learned control's identity.
+  nav.children.reverse();
+  h.dispatch(recent, 'click', { button: 0, isTrusted: true });
+  assert.equal(h.messages.pop().key, keys[1]);
+  h.dispatch(top);
+  assert.equal(prompts, 1);
+  assert.equal(h.notices.includes('ambiguous'), false);
+  const entries = learning.remember([], h.location.origin, keys[1], h.location.origin + '/new-chat');
+  h.change(entries);
+  await Promise.resolve();
+  h.dispatch(recent);
+  assert.equal(h.messages.pop().url, 'https://example.com/new-chat');
+});
+
+test('equal labels in indistinguishable sections remain blocked', () => {
+  const make = () => new Element('button', { type: 'button', 'aria-label': 'Same' });
+  const first = make();
+  const second = make();
+  const nav = new Element('nav', {}, [new Element('section', {}, [first]), new Element('section', {}, [second])]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  let prompts = 0;
+  const h = harness('example.com', { root, topFrame: true, confirm() { prompts++; return true; } });
+  h.dispatch(first);
+  assert.equal(prompts, 0);
+  assert.equal(h.messages.length, 0);
+  assert.equal(h.notices[0], 'ambiguous');
+});
+
 test('stable data identifiers are not interpreted as relative navigation URLs', () => {
   const h = harness('example.com');
   h.dispatch(iconButton({ 'data-route-id': 'opaque-id' }).icon);
@@ -306,6 +358,88 @@ test('GET form buttons and submit inputs still resolve without submitting; POST 
       else assert.equal(h.messages.length, 0);
     }
   }
+});
+
+test('cancelling initial confirmation never registers a probe or invokes the target', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'initial', 'aria-label': 'Initial navigation' });
+  let prompts = 0;
+  let clicks = 0;
+  button.click = () => clicks++;
+  const h = harness('example.com', { root: rootOf(button), topFrame: true,
+    confirm(text) { prompts++; assert.match(text, /Initial navigation/); return false; } });
+  h.dispatch(icon, 'pointerdown');
+  h.dispatch(icon, 'mousedown');
+  await Promise.resolve();
+  assert.equal(prompts, 1);
+  assert.equal(clicks, 0);
+  assert.equal(h.messages.length, 0);
+});
+
+test('confirmed discovery clicks once, only after the observer acknowledges consent', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'initial', 'aria-label': 'Initial navigation' });
+  let acknowledge;
+  let clicks = 0;
+  button.click = () => clicks++;
+  const response = new Promise(resolve => { acknowledge = resolve; });
+  const h = harness('example.com', { root: rootOf(button), topFrame: true, confirm: () => true,
+    acknowledge: () => response });
+  h.dispatch(icon, 'pointerdown');
+  h.dispatch(icon, 'mousedown');
+  await Promise.resolve();
+  assert.equal(clicks, 0);
+  assert.equal(h.messages.length, 1);
+  assert.equal(h.messages[0].type, 'beginConfirmedNavigationProbe');
+  assert.equal(h.messages[0].confirmed, true);
+  acknowledge({ ok: true });
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(clicks, 1);
+});
+
+test('rejected acknowledgements or changed source pages never execute the confirmed control', async () => {
+  for (const changed of [false, true]) {
+    const { icon, button } = iconButton({ 'data-item-id': 'initial' });
+    let clicks = 0;
+    button.click = () => clicks++;
+    const h = harness('example.com', { root: rootOf(button), topFrame: true, confirm: () => true,
+      acknowledge: async () => ({ ok: changed }) });
+    h.dispatch(icon);
+    if (changed) h.location.pathname = '/another-page';
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    assert.equal(clicks, 0);
+  }
+});
+
+test('immediate learned feedback avoids a second prompt while local persistence finishes', async () => {
+  const { icon, button } = iconButton({ 'data-item-id': 'initial' });
+  let prompts = 0;
+  const h = harness('example.com', { root: rootOf(button), topFrame: true,
+    confirm() { prompts++; return false; } });
+  h.dispatch(icon, 'click', { button: 0, isTrusted: true });
+  const key = h.messages.pop().key;
+  h.receive({ type: 'navigationProbeLearned', key, destination: 'https://example.com/destination' });
+  // The late initial storage read must not erase the freshly learned in-memory
+  // mapping while the background's durable write is still in flight.
+  await Promise.resolve();
+  h.dispatch(icon);
+  assert.equal(prompts, 0);
+  assert.equal(h.messages[0].url, 'https://example.com/destination');
+});
+
+test('history restoration uses the exact original entry, and refuses replaced or foreign entries', () => {
+  const h = harness('example.com');
+  const traversed = [];
+  const source = h.location.href;
+  h.window.navigation = { currentEntry: { key: 'destination' }, entries: () => [
+    { key: 'source', url: source }, { key: 'replaced', url: 'https://example.com/replaced' },
+  ], traverseTo(key) { traversed.push(key); return { committed: Promise.resolve() }; } };
+  for (const [entryKey, sourceUrl, expected] of [
+    ['source', source, true], ['replaced', source, false], ['source', 'https://other.example/', false],
+  ]) {
+    let response;
+    h.receive({ type: 'restoreConfirmedNavigationProbe', entryKey, sourceUrl }, value => { response = value; });
+    assert.equal(response.traversing, expected);
+  }
+  assert.deepEqual(traversed, ['source']);
 });
 
 function modeHarness({ url = 'https://chatgpt.com/#middleclick-plus-codex', ready = 'complete', selectAfter = 1 } = {}) {
@@ -337,7 +471,7 @@ function modeHarness({ url = 'https://chatgpt.com/#middleclick-plus-codex', read
   const window = { addEventListener() {}, postMessage() {} };
   vm.runInNewContext(source, {
     location, history, document, window, top: window, MiddleClickLearning: learning,
-    chrome: { storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } } },
+    chrome: { runtime: { onMessage: { addListener() {} } }, storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } } },
     setTimeout(fn) { timers.push(fn); },
     console: { warn(message) { warnings.push(message); } },
   });

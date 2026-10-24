@@ -30,8 +30,11 @@
   const STABLE_DATA_KEY = /^data-(?:[a-z0-9]+-)*(?:id|key|destination|route|action|target|testid)$/i;
   const RESOURCE_DATA_KEY = /(?:^|-)(?:icon|sprite|image|thumbnail|avatar|asset|background)(?:-|$)/i;
   let learnedEntries = [];
+  let learnedRevision = 0;
   let requestSequence = 0;
   let lastHandledMiddle = { url: '', time: 0 };
+  let lastProbeGesture = { control: null, time: 0 };
+  let activeProbe = false;
 
   function normalizeText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -313,11 +316,41 @@
     if (!key) return null;
     const candidates = document.querySelectorAll(CLICKABLE_SELECTOR);
     if (candidates.length > 1000) return null;
-    let matches = 0;
-    for (const candidate of candidates) {
-      if (fingerprint(candidate) === key && ++matches > 1) return null;
+    const matches = [...candidates].filter(candidate => fingerprint(candidate) === key);
+    if (matches.length === 1) return key; // Keep existing unambiguous cache keys.
+    if (matches.length === 0) return null;
+
+    // Equal labels can belong to different sections of the same navigation.
+    // Refine collisions with semantic ancestor identity, never an ordinal index
+    // that could silently identify another control after a list is reordered.
+    const context = sectionContext(control);
+    if (matches.filter(candidate => sectionContext(candidate) === context).length !== 1) return null;
+    const refined = JSON.stringify(['section-v1', key, context]);
+    return refined.length <= 2048 ? refined : null;
+  }
+
+  function sectionContext(control) {
+    const result = [];
+    let element = control.parentElement;
+    for (let depth = 0; element && depth < 12; depth++, element = element.parentElement) {
+      const tag = element.tagName.toLowerCase();
+      const role = element.getAttribute('role') || '';
+      const attrs = [];
+      for (const attr of element.attributes ?? []) {
+        if (!/^(id|aria-label)$/.test(attr.name) && !STABLE_DATA_KEY.test(attr.name) &&
+          !/^data-(?:[a-z0-9]+-)*(heading|name|label|section|region|group)$/i.test(attr.name)) continue;
+        if (RESOURCE_DATA_KEY.test(attr.name)) continue;
+        const value = normalizeText(attr.value);
+        if (!value || value.length > 160 || /^(?:[:_]|radix-)/i.test(value)) continue;
+        attrs.push([attr.name, value]);
+      }
+      attrs.sort((a, b) => a[0].localeCompare(b[0]));
+      if (attrs.length || /^(nav|aside|section|header|footer|article)$/.test(tag) || /^(region|group|navigation)$/.test(role)) {
+        result.push([tag, role, attrs]);
+      }
+      if (/^(nav|aside|body|html)$/.test(tag) || role === 'navigation') break;
     }
-    return matches === 1 ? key : null;
+    return JSON.stringify(result);
   }
 
   function resolveUrl(e) {
@@ -350,10 +383,62 @@
     e.stopImmediatePropagation();
   }
 
+  function notify(reason) {
+    globalThis.MiddleClickFeedback?.show(reason);
+  }
+
+  function requestConfirmedProbe(e) {
+    const control = clickControl(e);
+    if (!control || blockedControl(control, e.target) || control.closest('form') || control.form) return false;
+    // Native links retain browser handling, including links outside ChatGPT.
+    if (findNativeAnchor(e) && toWebUrl(findNativeAnchor(e).getAttribute('href'))) return false;
+    const key = uniqueLearningKey(control);
+    if (!key) { notify('ambiguous'); return false; }
+    suppressEvent(e);
+    if (lastProbeGesture.control === control && Date.now() - lastProbeGesture.time < 250) return true;
+    lastProbeGesture = { control, time: Date.now() };
+    if (activeProbe) { notify('busy'); return true; }
+    if (learnedEntries.some(entry => entry.origin === location.origin && entry.key === key && entry.ambiguous)) {
+      notify('ambiguous'); return true;
+    }
+    if (window !== top || chrome.extension?.inIncognitoContext || !MiddleClickLearning.learnableUrl(location.href)) {
+      notify('unavailable'); return true;
+    }
+    const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent).slice(0, 120);
+    // Explicit per-target consent is mandatory. Neither showing this prompt nor
+    // cancelling it may invoke the target's handler or start navigation.
+    if (typeof window.confirm !== 'function' || !window.confirm(
+      `「${label || 'この対象'}」の左クリック動作を実行して移動先を学習しますか？\n\n` +
+      '移動後に元のページへ戻り、移動先を別タブで開きます。\n' +
+      'クリックに伴う送信・削除・データ変更は、ページを戻しても取り消せません。')) {
+      lastProbeGesture.time = Date.now();
+      return true;
+    }
+    lastProbeGesture.time = Date.now();
+    if (uniqueLearningKey(control) !== key || !control.isConnected) { notify('unavailable'); return true; }
+    const sourceUrl = location.href;
+    activeProbe = true;
+    Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'beginConfirmedNavigationProbe', confirmed: true, key,
+      sourceUrl, entryKey: window.navigation?.currentEntry?.key || '' })).then(response => {
+      if (!response?.ok) { activeProbe = false; notify(response?.reason || 'unavailable'); return; }
+      if (location.href !== sourceUrl || !control.isConnected || uniqueLearningKey(control) !== key) {
+        activeProbe = false;
+        sendMessage({ type: 'cancelNavigationLearning' });
+        notify('unavailable');
+        return;
+      }
+      notify('checking');
+      // This is the sole generic discovery click, after the user's confirmation
+      // for this exact control and the background observer's acknowledgement.
+      control.click();
+    }).catch(() => { activeProbe = false; notify('unavailable'); });
+    return true;
+  }
+
   function handleResolvedMiddle(e) {
     if (e.button !== 1 || hasMods(e)) return;
     const url = extensionMiddleUrl(e);
-    if (!url) return;
+    if (!url) { requestConfirmedProbe(e); return; }
     suppressEvent(e);
     const now = performance.now();
     if (lastHandledMiddle.url === url && now - lastHandledMiddle.time < 120) return;
@@ -362,7 +447,8 @@
   }
 
   function suppressResolvedMiddle(e) {
-    if (e.button === 1 && !hasMods(e) && extensionMiddleUrl(e)) suppressEvent(e);
+    if (e.button === 1 && !hasMods(e) && (extensionMiddleUrl(e) ||
+      (lastProbeGesture.control === clickControl(e) && Date.now() - lastProbeGesture.time < 12000))) suppressEvent(e);
   }
 
   document.addEventListener('pointerdown', handleResolvedMiddle, { capture: true, passive: false });
@@ -370,18 +456,38 @@
   document.addEventListener('mouseup', suppressResolvedMiddle, { capture: true, passive: false });
   document.addEventListener('auxclick', suppressResolvedMiddle, { capture: true, passive: false });
 
+  chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (sender.id !== chrome.runtime.id) return;
+    if (message?.type === 'navigationProbeFeedback') {
+      activeProbe = false;
+      notify(message.reason);
+    } else if (message?.type === 'navigationProbeLearned') {
+      learnedRevision++;
+      learnedEntries = MiddleClickLearning.remember(learnedEntries, location.origin, message.key, message.destination);
+    } else if (message?.type === 'readConfirmedNavigationEntry') {
+      respond({ url: location.href, entryKey: window.navigation?.currentEntry?.key || '' });
+    } else if (message?.type === 'restoreConfirmedNavigationProbe') {
+      const source = MiddleClickLearning.learnableUrl(message.sourceUrl);
+      const navigation = window.navigation;
+      const entry = source?.origin === location.origin && navigation?.entries().find(item =>
+        item.key === message.entryKey && item.url === source.href);
+      if (!entry || entry.key === navigation.currentEntry?.key) { respond({ traversing: false }); return; }
+      respond({ traversing: true });
+      try { navigation.traverseTo(entry.key).committed.catch(() => {}); } catch { /* Background can reload the source URL. */ }
+    }
+  });
+
   function setupNavigationLearning() {
     if (!/^https?:$/.test(location.protocol) || chrome.extension?.inIncognitoContext) return;
-    let revision = 0;
     const { STORAGE_KEY, clean } = MiddleClickLearning;
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !Object.hasOwn(changes, STORAGE_KEY)) return;
-      revision++;
+      learnedRevision++;
       learnedEntries = clean(changes[STORAGE_KEY].newValue);
     });
-    const initialRevision = revision;
+    const initialRevision = learnedRevision;
     chrome.storage.local.get(STORAGE_KEY).then(data => {
-      if (revision === initialRevision) learnedEntries = clean(data[STORAGE_KEY]);
+      if (learnedRevision === initialRevision) learnedEntries = clean(data[STORAGE_KEY]);
     }).catch(() => {});
 
     const cancel = () => sendMessage({ type: 'cancelNavigationLearning' });

@@ -1,6 +1,7 @@
 "use strict";
 
 importScripts("navigation-learning.js");
+importScripts("navigation-probe.js");
 
 function setupContextMenu() {
   chrome.contextMenus.create({ id: "openInNewTab", title: "New Tab", contexts: ["all"] });
@@ -14,6 +15,7 @@ chrome.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId === "forgetLearnedNavigation") {
     const origin = MiddleClickLearning.webUrl(info.frameUrl || info.pageUrl)?.origin;
     if (origin) {
+      navigationProbes.cancelOrigin(origin);
       for (const [key, pending] of LEARNING_CLICKS) if (pending.origin === origin) cancelLearning(key);
       updateLearning(entries => entries.filter(entry => entry.origin !== origin));
     }
@@ -39,7 +41,8 @@ function updateLearning(transform) {
     const data = await chrome.storage.local.get(STORAGE_KEY);
     const entries = transform(clean(data[STORAGE_KEY]));
     await chrome.storage.local.set({ [STORAGE_KEY]: { version: 1, entries } });
-  }).catch(error => console.warn("MiddleClick+: could not save learned destinations.", error));
+    return true;
+  }).catch(error => { console.warn("MiddleClick+: could not save learned destinations.", error); return false; });
   return learningWrites;
 }
 
@@ -219,3 +222,6 @@ chrome.tabs.onCreated.addListener((tab) => {
   clearTimeout(best.timer);
   PENDING.delete(best.id);
 });
+
+const navigationProbes = MiddleClickProbe.install({ chrome, learning: MiddleClickLearning, save: updateLearning,
+  open: createBackgroundTabNextToSource, cancelPassive: cancelLearning });
