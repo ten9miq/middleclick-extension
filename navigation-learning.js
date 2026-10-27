@@ -55,6 +55,35 @@
     return matches[0].url;
   }
 
+  function withoutSourcePath(key) {
+    try {
+      const identity = JSON.parse(key);
+      if (!Array.isArray(identity)) return null;
+      if (identity.length === 3 && identity[0] === 'section-v1' && typeof identity[2] === 'string') {
+        const base = withoutSourcePath(identity[1]);
+        return base ? JSON.stringify(['section-v1', base, identity[2]]) : null;
+      }
+      if (identity.length !== 7 || identity[0] !== 'v1' || !Array.isArray(identity[3]) ||
+        identity[3].length || typeof identity[4] !== 'string' || !identity[4] ||
+        !Array.isArray(identity[5]) || typeof identity[6] !== 'string' || !identity[6].startsWith('/')) return null;
+      identity[6] = '*';
+      return JSON.stringify(identity);
+    } catch { return null; }
+  }
+
+  // Only called for explicitly labelled navigation controls. Retain the stored
+  // path-specific keys so old mappings work and conflicting routes stay local.
+  function lookupAcrossPaths(entries, origin, key, now = Date.now()) {
+    const identity = withoutSourcePath(key);
+    if (!identity) return null;
+    const matches = clean({ version: 1, entries }, now)
+      .filter(entry => entry.origin === origin && withoutSourcePath(entry.key) === identity);
+    if (!matches.length || matches.some(entry => entry.ambiguous) ||
+      new Set(matches.map(entry => entry.key)).size !== matches.length) return null;
+    const urls = new Set(matches.map(entry => entry.url));
+    return urls.size === 1 ? matches[0].url : null;
+  }
+
   function siteOrigins(value) {
     if (value?.version !== 1 || !Array.isArray(value.origins)) return [];
     return [...new Set(value.origins.filter(origin => {
@@ -77,7 +106,7 @@
   }
 
   const api = Object.freeze({ STORAGE_KEY, SITE_PERMISSION_KEY, MAX_AGE_MS, MAX_ENTRIES,
-    webUrl, learnableUrl, clean, remember, lookup, siteOrigins, siteAllowed, setSiteAllowed });
+    webUrl, learnableUrl, clean, remember, lookup, lookupAcrossPaths, siteOrigins, siteAllowed, setSiteAllowed });
   globalThis.MiddleClickLearning = api;
   if (typeof module !== "undefined") module.exports = api;
 })();

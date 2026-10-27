@@ -2,6 +2,7 @@
 
 ## 1.3.0
 
+- Reuse existing learned URLs across source paths for explicitly labelled navigation controls, without site-specific routes. Keep section distinctions and path-local records, reject conflicting cross-path destinations, and leave text-only and main-content controls path scoped.
 - Replace ChatGPT fixed routes, title matching and fetch/XHR inspection with generic URL detection and passive learning from normal left-click navigation, without modifying page APIs.
 - Store up to 500 learned destinations locally for 90 days, reject ambiguous mappings, and provide a context menu to forget mappings for a site.
 - Ask once for explicit site-wide consent, saved per exact origin (scheme, hostname and port). Other eligible unknown controls on that site can then be discovered without another prompt. Check the grant before every discovery and provide a separate revocation menu.
@@ -11,7 +12,7 @@
 - Exclude SVG resources and global metadata, and bound URL detection to the clicked control to avoid opening icon assets or unrelated destinations.
 - Keep the Codex mode initializer and the ChatGPT sidebar background-tab workaround as the remaining site-specific behavior.
 - Add status feedback for cancellations, unsupported destinations, timeouts, permission failures and restoration errors.
-- Add `storage` and `webNavigation` permissions, and expand regression coverage to 74 tests for navigation, persistence, consent, revocation, ambiguity and concurrency.
+- Add `storage` and `webNavigation` permissions, and expand regression coverage to 80 tests for navigation, persistence, consent, revocation, ambiguity, cross-path reuse and concurrency.
 
 ## 1.2.3
 

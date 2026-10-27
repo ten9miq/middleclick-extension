@@ -56,3 +56,28 @@ test('site consent persists independently and matches exact origins without subd
   assert.equal(learning.siteAllowed({ version: 2, origins: [origin] }, origin), false);
   assert.deepEqual(learning.siteOrigins({ version: 1, origins: [null, 'javascript:test', origin, origin, origin + '/path'] }), [origin]);
 });
+
+const navigationKey = (path, label = 'Workspace B: new conversation') =>
+  JSON.stringify(['v1', 'button', '', [], label, ['nav', 'Sidebar', ''], path]);
+
+test('cross-path lookup reuses agreeing legacy records but retains origin and expiry boundaries', () => {
+  let entries = learning.remember([], origin, navigationKey('/a?view=one'), origin + '/b/new', now);
+  entries = learning.remember(entries, origin, navigationKey('/c'), origin + '/b/new', now);
+  const key = navigationKey('/unseen');
+  assert.equal(learning.lookupAcrossPaths(entries, origin, key, now), origin + '/b/new');
+  assert.equal(learning.lookupAcrossPaths(entries, 'https://other.example', key, now), null);
+  assert.equal(learning.lookupAcrossPaths(entries, origin, key, now + learning.MAX_AGE_MS + 1), null);
+  assert.equal(learning.lookupAcrossPaths(entries, origin, navigationKey('/unseen', 'Workspace D'), now), null);
+  assert.equal(learning.lookupAcrossPaths(entries, origin, 'not-json', now), null);
+  assert.equal(learning.lookupAcrossPaths(entries, origin, JSON.stringify(['v1']), now), null);
+});
+
+test('cross-path conflicts, ambiguous records and duplicate stored keys prevent reuse', () => {
+  const first = learning.remember([], origin, navigationKey('/a'), origin + '/b/new', now);
+  let conflict = learning.remember(first, origin, navigationKey('/c'), origin + '/c/new', now);
+  assert.equal(learning.lookupAcrossPaths(conflict, origin, navigationKey('/unseen'), now), null);
+  conflict = learning.remember(first, origin, navigationKey('/a'), origin + '/changed', now);
+  conflict = learning.remember(conflict, origin, navigationKey('/c'), origin + '/b/new', now);
+  assert.equal(learning.lookupAcrossPaths(conflict, origin, navigationKey('/unseen'), now), null);
+  assert.equal(learning.lookupAcrossPaths([...first, ...first], origin, navigationKey('/unseen'), now), null);
+});

@@ -280,6 +280,103 @@ test('storage changes invalidate a learned destination in already-open documents
   assert.equal(h.messages.length, 0);
 });
 
+test('explicitly labelled navigation reuses legacy mappings across paths and reloads without clicking', async () => {
+  for (const labelAttr of ['aria-label', 'title']) {
+    const first = iconButton({ [labelAttr]: 'Workspace B: new conversation' });
+    const h = harness('example.com', { root: rootOf(first.button) });
+    h.dispatch(first.icon, 'click', { button: 0, isTrusted: true });
+    const key = h.messages.pop().key;
+    const entries = learning.remember([], h.location.origin, key, h.location.origin + '/workspace-b/new');
+    const next = iconButton({ [labelAttr]: 'Workspace B: new conversation' });
+    let clicks = 0;
+    next.button.click = () => clicks++;
+    const loaded = harness('example.com', { entries, root: rootOf(next.button), topFrame: true, siteAllowed: true });
+    loaded.location.pathname = '/workspace-c/conversations/another';
+    loaded.location.search = '?view=compact';
+    await flush();
+    loaded.dispatch(next.icon);
+    await flush();
+    assert.equal(clicks, 0);
+    assert.deepEqual(loaded.messages.map(message => message.type), ['maybeOpenOnMiddle']);
+    assert.equal(loaded.messages[0].url, 'https://example.com/workspace-b/new');
+    assert.equal(loaded.location.pathname, '/workspace-c/conversations/another');
+
+    next.button.attrs[labelAttr] = 'Workspace D: new conversation';
+    loaded.advance();
+    loaded.dispatch(next.icon);
+    await flush();
+    assert.equal(clicks, 1);
+    assert.equal(loaded.messages.at(-1).type, 'beginSiteNavigationProbe');
+  }
+});
+
+test('text-only and main-content controls keep path-local learning', async () => {
+  for (const kind of ['text', 'main', 'main-navigation']) {
+    const { icon, button } = iconButton(kind === 'text' ? {} : { 'aria-label': 'Open details' });
+    button.text = 'Open details';
+    if (kind !== 'text') {
+      const nav = button.parentElement;
+      const main = new Element('main', {}, kind === 'main' ? [button] : [nav]);
+      new Element('html', {}, [new Element('body', {}, [main])]);
+    }
+    const h = harness('example.com', { root: rootOf(button) });
+    h.dispatch(icon, 'click', { button: 0, isTrusted: true });
+    const key = h.messages.pop().key;
+    h.change(learning.remember([], h.location.origin, key, h.location.origin + '/details/old'));
+    await flush();
+    h.location.pathname = '/different-document';
+    h.dispatch(icon);
+    assert.equal(h.messages.some(message => message.type === 'maybeOpenOnMiddle'), false, kind);
+  }
+});
+
+test('cross-path navigation keeps equal labels in separate sections distinct', async () => {
+  const first = new Element('button', { 'aria-label': 'New conversation' });
+  const second = new Element('button', { 'aria-label': 'New conversation' });
+  const nav = new Element('nav', {}, [new Element('section', { 'aria-label': 'Workspace A' }, [first]),
+    new Element('section', { 'aria-label': 'Workspace B' }, [second])]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  const h = harness('example.com', { root });
+  h.dispatch(first, 'click', { button: 0, isTrusted: true });
+  h.dispatch(second, 'click', { button: 0, isTrusted: true });
+  const keys = h.messages.splice(0).map(message => message.key);
+  let entries = learning.remember([], h.location.origin, keys[0], h.location.origin + '/a/new');
+  entries = learning.remember(entries, h.location.origin, keys[1], h.location.origin + '/b/new');
+  h.change(entries);
+  await flush();
+  h.location.pathname = '/another-session';
+  nav.children.reverse();
+  h.dispatch(first);
+  assert.equal(h.messages.pop().url, 'https://example.com/a/new');
+  h.dispatch(second);
+  assert.equal(h.messages.pop().url, 'https://example.com/b/new');
+});
+
+test('conflicting cross-path routes trigger local discovery while exact paths remain usable', async () => {
+  const { icon, button } = iconButton({ 'aria-label': 'Open workspace' });
+  let clicks = 0;
+  button.click = () => clicks++;
+  const h = harness('example.com', { root: rootOf(button), topFrame: true, siteAllowed: true });
+  h.dispatch(icon, 'click', { button: 0, isTrusted: true });
+  const keyA = h.messages.pop().key;
+  h.location.pathname = '/workspace-b';
+  h.dispatch(icon, 'click', { button: 0, isTrusted: true });
+  const keyB = h.messages.pop().key;
+  let entries = learning.remember([], h.location.origin, keyA, h.location.origin + '/a/new');
+  entries = learning.remember(entries, h.location.origin, keyB, h.location.origin + '/b/new');
+  h.change(entries);
+  await flush();
+  h.dispatch(icon);
+  assert.equal(h.messages.pop().url, 'https://example.com/b/new');
+  assert.equal(clicks, 0);
+  h.location.pathname = '/unknown-workspace';
+  h.advance();
+  h.dispatch(icon);
+  await flush();
+  assert.equal(clicks, 1);
+  assert.equal(h.messages.at(-1).type, 'beginSiteNavigationProbe');
+});
+
 test('duplicate controls and submit/menu/disabled controls are not learned', () => {
   for (const kind of ['duplicate', 'form', 'menu', 'disabled']) {
     const first = iconButton({ 'data-item-id': 'same', 'aria-label': 'Same' });

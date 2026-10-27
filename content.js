@@ -362,7 +362,15 @@
     const detected = staticUrl(e, control);
     if (detected) return detected;
     const key = uniqueLearningKey(control);
-    return key ? MiddleClickLearning.lookup(learnedEntries, location.origin, key) : null;
+    if (!key) return null;
+    const saved = MiddleClickLearning.lookup(learnedEntries, location.origin, key);
+    if (saved) return saved;
+    // Explicit labels in navigation can identify the same destination while
+    // the main view changes. Text-only and main-content controls remain local.
+    const region = control.parentElement?.closest?.('nav, aside, [role="navigation"]');
+    const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title'));
+    if (!region || control.closest('main, [role="main"]') || !label || label.length > 160) return null;
+    return MiddleClickLearning.lookupAcrossPaths(learnedEntries, location.origin, key);
   }
 
   function sendMessage(message) {
