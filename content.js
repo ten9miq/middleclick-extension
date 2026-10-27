@@ -276,6 +276,8 @@
 
   function staticUrl(e, control = clickControl(e)) {
     if (blockedControl(control, e.target)) return null;
+    const driveUrl = driveItemDestination(control);
+    if (driveUrl) return driveUrl;
     const elements = scopedElements(e, control);
     for (const element of elements) {
       const url = urlFromElementAttributes(element);
@@ -284,6 +286,25 @@
     const formUrl = urlFromGetForm(e.target);
     if (formUrl) return formUrl;
     return uniqueDescendantUrl(control || elements[0]);
+  }
+
+  function driveItemDestination(control) {
+    // Drive list rows and grid cells expose an item ID, not an href. The
+    // /open endpoint resolves both files and folders without guessing a type
+    // from localized labels or icon artwork. Never borrow a parent item's ID
+    // when the clicked control is its owner button, toolbar, or action menu.
+    if (location.origin !== 'https://drive.google.com' || !/^\/drive(?:\/|$)/.test(location.pathname) ||
+      !control || !/^(row|gridcell)$/.test(control.getAttribute('role') || '') ||
+      control.getAttribute('data-target') !== 'doc' || !control.hasAttribute('data-selectable') ||
+      control.closest('form') || control.form) return null;
+    const id = control.getAttribute('data-id') || '';
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return null;
+    const url = new URL('https://drive.google.com/open');
+    url.searchParams.set('id', id);
+    const account = location.pathname.match(/^\/drive\/u\/(\d+)(?:\/|$)/)?.[1] ||
+      new URLSearchParams(location.search).get('authuser');
+    if (account) url.searchParams.set('authuser', account);
+    return url.href;
   }
 
   function codexDestination(control) {

@@ -2,7 +2,10 @@
 // Select a safe navigation control. This sends synthetic events, not physical input.
 async function syntheticMiddleClick(element) {
   if (!/^https?:$/.test(location.protocol)) throw new Error('Use an HTTP(S) test page.');
-  if (!element?.isConnected || !element.matches('a, area, button, [role="link"], [role="button"]')) {
+  const driveItem = location.origin === 'https://drive.google.com' &&
+    element?.matches('[role="row"], [role="gridcell"]') &&
+    element.getAttribute('data-target') === 'doc' && element.hasAttribute('data-selectable');
+  if (!element?.isConnected || (!driveItem && !element.matches('a, area, button, [role="link"], [role="button"]'))) {
     throw new Error('Select a visible navigation control from a fresh snapshot.');
   }
   if (element.closest('form') || element.form || element.hasAttribute('aria-haspopup')) {

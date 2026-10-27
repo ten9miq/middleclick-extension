@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.3.1。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.3.2。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -116,6 +116,15 @@ Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` �
 - `node --test tests/*.test.cjs`の80件が成功。汎用ホストのテストで、旧記録の再利用、パス・クエリ変更、再読み込み、別ラベル、同名の別セクション、本文・テキストのみの項目、移動先の競合、origin、期限、曖昧・重複記録を確認した。
 - 2026-10-27、専用Chrome 155.0.8059.85 / 9223の実サイトで、修正前に保存したプロジェクト新規チャットの記録を使用した。1280×900で、未学習の別セッションとホーム画面から合成中ボタンイベントを実行し、対象のclickイベント0件、Navigation APIの遷移0件、元のentry key維持、右隣のバックグラウンドタブ1件増加、元タブactive維持を確認した。記録の移行・追加学習は不要だった。物理マウス入力の検証ではない。
 - 対象拡張service workerのwarn/errorは0件。ページ側にはサイト由来のStatsigキャッシュ警告があった。検証用タブは閉じ、私的本文・URLを含むログや画像はGitへ保存しない。
+
+## Google Driveの未学習項目（2026-10-28）
+
+- 専用Chrome 155.0.8059.85 / 9223のマイドライブで、リストの`role="row"`とグリッドの`role="gridcell"`に`data-target="doc"`、`data-selectable`、`data-id`があることを確認した。通常のダブルクリックで同じIDのフォルダへ移動し、Driveの`/open?id=...&authuser=0`でも同じフォルダへ解決されることを確認した。
+- `content.js`はこの項目IDから開くURLを直接組み立てる。IDだけからファイル種別を推測せず、Driveに解決させる。クリック対象のcontrolが行／セル自身の場合に限り、オーナーボタンや操作メニューから行のIDを借用しない。アカウント番号のパスを優先し、なければ`authuser`を引き継ぐ。
+- 拡張とページを再読み込みし、1238×1048の実画面で未学習の異なる3フォルダを検証した。グリッドで1件、リストで2件について、`scripts/synthetic-middle-click.js`からSVGアイコンへ中ボタンの一連の合成イベントを送信した。各操作で右隣にバックグラウンドタブが1つだけ増え、元タブのactive状態・URL・Navigation API entry keyが維持された。元ページのclick・dblclick・navigateイベントは0件で、Driveの学習件数は既存の1件から増えず、サイトの学習許可も未付与のままだった。
+- 通常のシングルクリックによる選択、ダブルクリックによる元タブ内のフォルダ移動も確認した。検証用に作成したタブは閉じた。個人のフォルダ名・ID・URL・スクリーンショットはこの記録へ保存しない。
+- 自動テスト84件が成功。対象拡張service workerのwarn/errorは0件だった。ページConsoleにはTrustedScript、ERR_BLOCKED_BY_CLIENT、Permissions-Policy等のメッセージがあり、ツールが発生元を示さないものは未特定とする。
+- 実サイト上の合成イベントによる検証であり、物理マウスの受入確認ではない。複数アカウント、ファイル種別、ショートカット項目は実画面で未検証。
 
 ## 自動検査
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2
+
+- Open selectable Google Drive list/grid items directly from their item IDs, preserving the active account context and avoiding per-folder learning or discovery clicks. Keep nested owner buttons and action menus separate from item navigation.
+- Add regression coverage for unlearned Drive items, account selection and detection boundaries; 84 tests pass.
+
 ## 1.3.1
 
 - Reuse existing learned URLs across source paths for explicitly labelled navigation controls, without site-specific routes. Keep section distinctions and path-local records, reject conflicting cross-path destinations, and leave text-only and main-content controls path scoped.

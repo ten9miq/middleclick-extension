@@ -17,6 +17,12 @@ The extension can resolve destinations from common href/router/data attributes, 
 
 SVG drawing references (such as `<use href="...svg#icon">`), resource metadata and global URL attributes on `<html>` / `<body>` are excluded. Detection stops at the clicked control instead of borrowing another item's URL from a broad ancestor. Opaque data identifiers are not interpreted as relative URLs.
 
+## Google Drive items
+
+On `https://drive.google.com/drive/...`, list rows and grid cells marked as selectable Drive items can open directly from their item ID. No per-folder learning or automatic discovery click is needed. The extension uses Drive's `/open?id=...` endpoint and preserves the account from `/drive/u/<number>/` or the `authuser` query parameter; Drive resolves the destination. Item names and folder icon artwork are not used to guess a URL.
+
+Nested owner buttons and action menus do not inherit their containing item's destination. Ordinary selection and double-click navigation remain available. Real-site verification covers My Drive folders in list and grid views with synthetic middle-button events; physical mouse input, multiple signed-in accounts, file types and shortcut items have not been verified.
+
 ## Generic navigation learning
 
 The extension passively learns identifiable controls from normal left clicks. When an unlearned control is middle-clicked on an unapproved site, it asks once for permission to discover destinations on that site. After the grant is saved, it can execute the left-click action of other eligible unlearned controls there without additional confirmation. It observes the destination, restores the original page, and opens the destination in an adjacent background tab. Learned controls use the stored URL directly. Cancelling the site prompt does not grant permission, click, navigate, or create a tab.

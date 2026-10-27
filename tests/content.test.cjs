@@ -446,6 +446,88 @@ test('stable data identifiers are not interpreted as relative navigation URLs', 
   assert.equal(h.messages.length, 0);
 });
 
+function driveItem(role = 'row', id = 'folder_abcdefgh1234') {
+  const icon = new Element('svg', {}, [new Element('path', {}, [], SVG)], SVG);
+  const label = new Element('span', {}, [icon]);
+  const item = new Element('div', { role, 'data-id': id, 'data-target': 'doc',
+    'data-selectable': '', tabindex: '-1' }, [label]);
+  return { item, label, icon };
+}
+
+test('Drive list and grid items open different unlearned IDs without clicking or discovery', () => {
+  for (const role of ['row', 'gridcell']) {
+    const h = harness('drive.google.com');
+    h.location.pathname = '/drive/u/2/my-drive';
+    for (const id of ['folder_abcdefgh1234', 'another_abcdefgh5678']) {
+      const { item, icon } = driveItem(role, id);
+      let clicks = 0;
+      item.click = () => clicks++;
+      for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) {
+        assert.equal(h.dispatch(icon, type).defaultPrevented, true);
+      }
+      assert.equal(clicks, 0);
+      assert.equal(h.messages.at(-1).url, `https://drive.google.com/open?id=${id}&authuser=2`);
+      h.advance();
+    }
+    assert.deepEqual(h.messages.map(message => message.type), ['maybeOpenOnMiddle', 'maybeOpenOnMiddle']);
+  }
+});
+
+test('Drive account context comes from the current path or authuser query', () => {
+  for (const [path, search, account] of [
+    ['/drive/u/0/folders/parent_1234567890', '?authuser=3', '0'],
+    ['/drive/my-drive', '?authuser=3', '3'],
+    ['/drive/folders/parent_1234567890', '?authuser=person%40example.com', 'person@example.com'],
+    ['/drive/my-drive', '', null],
+  ]) {
+    const h = harness('drive.google.com');
+    h.location.pathname = path;
+    h.location.search = search;
+    h.dispatch(driveItem().icon);
+    const url = new URL(h.messages[0].url);
+    assert.equal(url.searchParams.get('authuser'), account);
+    assert.equal(url.searchParams.get('id'), 'folder_abcdefgh1234');
+  }
+});
+
+test('Drive row actions cannot borrow the item ID, and normal clicks are not activated', () => {
+  const { item, icon } = driveItem();
+  const owner = new Element('div', { role: 'button', tabindex: '-1' });
+  const menu = new Element('button', { 'aria-haspopup': 'menu' });
+  item.children.push(owner, menu);
+  owner.parentElement = menu.parentElement = item;
+  const root = new Element('html', {}, [new Element('body', {}, [item])]);
+  const h = harness('drive.google.com', { root });
+  h.location.pathname = '/drive/u/0/my-drive';
+  let clicks = 0;
+  item.click = () => clicks++;
+  h.dispatch(owner);
+  h.dispatch(menu);
+  assert.equal(h.messages.some(message => message.type === 'maybeOpenOnMiddle'), false);
+  h.messages.length = 0;
+  assert.equal(h.dispatch(icon, 'click', { button: 0, isTrusted: true }).defaultPrevented, undefined);
+  assert.deepEqual(h.messages.map(message => message.type), ['cancelNavigationLearning']);
+  assert.equal(clicks, 0);
+});
+
+test('Drive ID detection is limited to HTTPS Drive item rows and cells', () => {
+  for (const kind of ['host', 'subdomain', 'http', 'path', 'role', 'target', 'selectable', 'id', 'form', 'disabled']) {
+    const host = kind === 'host' ? 'example.com' : kind === 'subdomain' ? 'drive.google.com.example.com' : 'drive.google.com';
+    const h = harness(host);
+    h.location.pathname = kind === 'path' ? '/file/d/abcdefgh1234/view' : '/drive/u/0/my-drive';
+    const { item, icon } = driveItem();
+    if (kind === 'http') h.location.protocol = 'http:';
+    if (kind === 'role') item.attrs.role = 'button';
+    if (kind === 'target') item.attrs['data-target'] = 'node';
+    if (kind === 'selectable') delete item.attrs['data-selectable'];
+    if (kind === 'id') item.attrs['data-id'] = '../not-an-id?';
+    if (kind === 'form') new Element('form', {}, [item]);
+    if (kind === 'disabled') item.attrs['aria-disabled'] = 'true';
+    h.dispatch(icon);
+    assert.equal(h.messages.some(message => message.type === 'maybeOpenOnMiddle'), false, kind);
+  }
+});
+
 test('a control cannot borrow another navigation item URL from a broad ancestor', () => {
   const unknown = iconButton();
   unknown.button.parentElement.children.push(new Element('a', { href: '/unrelated' }));
