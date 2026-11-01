@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0
+
+- Add conservative generic cross-page reuse for controls with their own business IDs and a full owner-ID chain. Require two agreeing source paths, retain query/hash context, and reject mismatched owners/items, generated IDs, ambiguity, duplicates and conflicting destinations. Preserve exact-page lookup and keep owner-free legacy records out of the new evidence pool.
+- Verify the learning-to-reuse flow and rejection cases in a local Chrome fixture; expand regression coverage to 121 passing tests.
+- Reduce repeated ChatGPT discovery with shared Home New chat action identities and project-ID-based identities that survive source-page changes, reorder and later project renames. Reuse compatible legacy records without migration while retaining conflict and project-ID checks.
+- Wait for the initial mapping read before discovering an apparently unknown control, and cancel safely if the source or user action changes. Add regression tests for these cases.
+- Delegate Drive item opening to its normal Open action, so Drive chooses the current default application for each file. Keep the actual app tab, restore same-tab navigation before reopening its observed destination, and close/reopen embedded previews in a separate tab. Remove editor URL and Markdown type guesses.
+- Place resulting tabs to the right, preserve tab groups and return stolen focus without overriding another user-selected tab. Reject ambiguous selection or stale requests, report timeouts and leave nested action controls alone.
+- Add regression coverage for Drive default opening, preview handling, source restoration, tab adoption, cancellation and detection boundaries.
+
 ## 1.3.2
 
 - Open selectable Google Drive list/grid items directly from their item IDs, preserving the active account context and avoiding per-folder learning or discovery clicks. Keep nested owner buttons and action menus separate from item navigation.

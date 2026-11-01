@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>MiddleClick+ ownership verification</title>
+<style>body { font: 16px system-ui; margin: 40px; } button { padding: 16px; }</style>
+<body data-account-id="account-acme">
+  <main>
+    <h1>Ownership verification</h1>
+    <p id="status"></p>
+    <section data-workspace-id="workspace-alpha">
+      <button id="open-record" type="button" data-record-id="record-42" aria-label="Open details">Open details</button>
+    </section>
+  </main>
+  <script>
+    const source = location.pathname;
+    const workspace = document.querySelector('section');
+    if (source === '/other-owner') workspace.dataset.workspaceId = 'workspace-beta';
+    window.fixture = { source, clicks: 0, navigations: 0 };
+    document.querySelector('#status').textContent = 'Source: ' + source;
+    navigation.addEventListener('navigate', () => fixture.navigations++);
+    document.querySelector('#open-record').addEventListener('click', () => {
+      fixture.clicks++;
+      history.pushState({ fixture: true }, '', source === '/conflict' ? '/records/different' : '/records/42');
+      document.querySelector('#status').textContent = 'Record opened';
+    });
+  </script>
+</body>
+</html>

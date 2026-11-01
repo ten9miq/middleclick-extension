@@ -29,6 +29,9 @@ class Element {
   get textContent() { return this.text || this.children.map(child => child.textContent).join(''); }
   getAttribute(name) { return this.attrs[name] ?? null; }
   hasAttribute(name) { return Object.hasOwn(this.attrs, name); }
+  dispatchEvent(event) { (this.events ??= []).push(event); this.onDispatch?.(event); return true; }
+  focus() { this.focused = true; }
+  getBoundingClientRect() { return { x: 10, y: 10, width: 100, height: 30 }; }
   get isConnected() { return rootOf(this).tagName.toLowerCase() === 'html'; }
   matches(selector) {
     return selector.split(',').some(part => {
@@ -55,7 +58,7 @@ class Element {
 
 function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = false,
   confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }), siteAllowed = false,
-  savePermission = async () => ({ ok: true }) } = {}) {
+  savePermission = async () => ({ ok: true }), driveAcknowledge = async () => ({ ok: true }), loadEntries = null } = {}) {
   const listeners = new Map();
   const messages = [];
   const location = new URL(`https://${host}/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`);
@@ -65,14 +68,23 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
   const runtimeListeners = [];
   const window = { confirm };
   const document = {
+    querySelector() { return null; },
     baseURI: location.href,
     addEventListener(type, callback) { listeners.set(type, callback); },
     querySelectorAll(selector) {
+      if (selector === '[data-target="doc"][data-selectable][aria-selected="true"]') {
+        return root ? root.querySelectorAll('[data-target="doc"]').filter(el =>
+          el.hasAttribute('data-selectable') && el.getAttribute('aria-selected') === 'true') : [];
+      }
       return root ? root.querySelectorAll(selector) : [];
     },
   };
   const saved = { [learning.STORAGE_KEY]: { version: 1, entries } };
   vm.runInNewContext(source, {
+    setTimeout: callback => { queueMicrotask(callback); },
+    MouseEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
+    PointerEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
+    KeyboardEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     Element, Node: { ELEMENT_NODE: 1 }, URL, URLSearchParams, location,
     FormData: class {
       constructor(form) { this.fields = form.fields || []; }
@@ -84,6 +96,7 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
     chrome: { runtime: { id: 'extension', onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
       sendMessage(message) {
         messages.push(message);
+        if (message.type === 'beginDriveDefaultOpen') return driveAcknowledge();
         if (message.type === 'getSiteLearningPermission') return Promise.resolve({ ok: true, allowed: siteAllowed });
         if (message.type === 'grantSiteLearningPermission') return savePermission().then(response => {
           if (response.ok) siteAllowed = true;
@@ -91,7 +104,7 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
         });
         return message.type === 'beginSiteNavigationProbe' ? acknowledge() : undefined;
       } }, storage: {
-      local: { get: async () => saved }, onChanged: { addListener(callback) { changed = callback; } },
+      local: { get: () => loadEntries ? loadEntries() : Promise.resolve(saved) }, onChanged: { addListener(callback) { changed = callback; } },
     } },
     performance: { now: () => time },
   });
@@ -446,88 +459,379 @@ test('stable data identifiers are not interpreted as relative navigation URLs', 
   assert.equal(h.messages.length, 0);
 });
 
-function driveItem(role = 'row', id = 'folder_abcdefgh1234') {
-  const icon = new Element('svg', {}, [new Element('path', {}, [], SVG)], SVG);
-  const label = new Element('span', {}, [icon]);
+function ownedControl({ owner = 'workspace-alpha', account = 'account-acme', item = 'record-42' } = {}) {
+  const control = iconButton({ 'data-record-id': item, 'aria-label': 'Open details' });
+  const workspace = new Element('section', { 'data-workspace-id': owner }, [control.button]);
+  const main = new Element('main', {}, [workspace]);
+  const root = new Element('html', {}, [new Element('body', { 'data-account-id': account }, [main])]);
+  return { ...control, workspace, main, root };
+}
+
+function observeOwned(h, target, path) {
+  h.location.pathname = path;
+  h.dispatch(target, 'click', { button: 0, isTrusted: true });
+  return h.messages.pop().key;
+}
+
+test('generic owned items require two matching pages, then open from a third without discovery', async () => {
+  const item = ownedControl();
+  const h = harness('example.com', { root: item.root, topFrame: true });
+  const first = observeOwned(h, item.icon, '/first');
+  assert.equal(JSON.parse(first)[0], 'owned-v1');
+  let entries = learning.remember([], h.location.origin, first, h.location.origin + '/records/42');
+  h.change(entries); await flush();
+  h.location.pathname = '/second';
+  h.dispatch(item.icon); await flush();
+  assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false);
+  const second = observeOwned(h, item.icon, '/second');
+  entries = learning.remember(entries, h.location.origin, second, h.location.origin + '/records/42');
+  h.change(entries); await flush(); h.messages.length = 0;
+  h.location.pathname = '/third'; h.advance();
+  item.button.click = () => assert.fail('must not rediscover the item');
+  for (const event of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) assert.equal(h.dispatch(item.icon, event).defaultPrevented, true);
+  assert.deepEqual(h.messages.map(m => [m.type, m.url]), [['maybeOpenOnMiddle', h.location.origin + '/records/42']]);
+});
+
+test('generic owned items survive reordering and regenerated DOM while keeping same-name owners separate', async () => {
+  const item = ownedControl();
+  const h = harness('example.com', { root: item.root });
+  const first = observeOwned(h, item.icon, '/first');
+  const second = observeOwned(h, item.icon, '/second');
+  let entries = learning.remember([], h.location.origin, first, h.location.origin + '/records/42');
+  entries = learning.remember(entries, h.location.origin, second, h.location.origin + '/records/42');
+  const next = ownedControl();
+  next.workspace.attrs.id = 'new-dom-wrapper';
+  next.workspace.attrs['aria-label'] = 'Renamed section';
+  const other = ownedControl({ owner: 'workspace-beta' });
+  next.main.children.unshift(other.workspace); other.workspace.parentElement = next.main;
+  const loaded = harness('example.com', { root: next.root, entries, topFrame: true });
+  loaded.location.pathname = '/third'; await flush();
+  loaded.dispatch(next.icon);
+  assert.equal(loaded.messages.at(-1).url, h.location.origin + '/records/42');
+  loaded.advance(); loaded.dispatch(other.icon); await flush();
+  assert.equal(loaded.messages.filter(m => m.type === 'maybeOpenOnMiddle').length, 1);
+  const otherKey = observeOwned(loaded, other.icon, '/third');
+  assert.equal(JSON.parse(otherKey)[0], 'owned-v1');
+  assert.notDeepEqual(JSON.parse(otherKey)[2], JSON.parse(first)[2]);
+});
+
+test('generic ownership stores all ancestor IDs and retains query/hash instead of falling back to legacy keys', async () => {
+  const item = ownedControl(); const h = harness('example.com', { root: item.root, topFrame: true });
+  h.location.search = '?selection=one'; h.location.hash = '#panel';
+  const first = observeOwned(h, item.icon, '/first'), second = observeOwned(h, item.icon, '/second');
+  assert.deepEqual(JSON.parse(first)[2], [[['data-workspace-id', 'workspace-alpha']], [['data-account-id', 'account-acme']]]);
+  assert.equal(JSON.parse(JSON.parse(first)[1])[6], '/first?selection=one#panel');
+  let entries = learning.remember([], h.location.origin, first, h.location.origin + '/records/42');
+  entries = learning.remember(entries, h.location.origin, second, h.location.origin + '/records/42');
+  const old = JSON.parse(JSON.parse(first)[1]); old[6] = '*';
+  entries = learning.remember(entries, h.location.origin, JSON.stringify(old), h.location.origin + '/unsafe-legacy');
+  h.change(entries); await flush(); h.location.pathname = '/third'; h.location.search = '?selection=two';
+  h.dispatch(item.icon); await flush();
+  assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false);
+  assert.equal(h.messages.some(m => m.url?.includes('unsafe-legacy')), false);
+});
+
+test('generic ownership does not promote label-only controls, testing IDs, missing owners or generated IDs', () => {
+  for (const kind of ['label', 'testing', 'missing-owner', 'numeric-owner', 'generated-item', 'repeated-item']) {
+    const item = ownedControl();
+    if (kind === 'label' || kind === 'testing') delete item.button.attrs['data-record-id'];
+    if (kind === 'testing') item.button.attrs['data-testid'] = 'open-record';
+    if (kind === 'missing-owner') { delete item.workspace.attrs['data-workspace-id']; delete item.root.children[0].attrs['data-account-id']; }
+    if (kind === 'numeric-owner') item.workspace.attrs['data-workspace-id'] = '0';
+    if (kind === 'generated-item') item.button.attrs['data-record-id'] = 'react-generated';
+    if (kind === 'repeated-item') { item.workspace.attrs['data-workspace-id'] = 'record-42'; delete item.root.children[0].attrs['data-account-id']; }
+    const h = harness('example.com', { root: item.root });
+    const key = observeOwned(h, item.icon, '/first');
+    assert.equal(JSON.parse(key)[0], 'v1', kind);
+  }
+});
+
+test('duplicate item IDs within the same owner remain ambiguous, even in differently labelled wrappers', () => {
+  const item = ownedControl(), duplicate = ownedControl();
+  const section = new Element('section', { 'aria-label': 'Another view' }, [duplicate.button]);
+  item.workspace.children.push(section); section.parentElement = item.workspace;
+  const h = harness('example.com', { root: item.root, topFrame: true });
+  h.dispatch(item.icon);
+  assert.equal(h.messages.length, 0);
+  assert.ok(h.notices.includes('ambiguous'));
+});
+
+const CHAT_PROJECT_A = 'g-p-' + 'a'.repeat(32);
+const CHAT_PROJECT_B = 'g-p-' + 'b'.repeat(32);
+function chatProject(id = CHAT_PROJECT_A, name = 'Same') {
+  const item = iconButton({ 'aria-label': name + ' で新しいチャット' });
+  const row = new Element('div', { role: 'button', 'data-app-action-sidebar-project-id': id,
+    'data-app-action-sidebar-project-row': '' }, [item.button]);
+  const section = new Element('section', { id: 'volatile-section', 'aria-label': 'Projects' }, [row]);
+  const nav = new Element('nav', { 'aria-label': 'ホーム' }, [section]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  return { ...item, row, section, nav, root };
+}
+
+test('ChatGPT project action keys survive reordering, renaming, source changes and reloads', async () => {
+  const first = chatProject();
+  const h = harness('chatgpt.com', { root: first.root });
+  h.dispatch(first.icon, 'click', { button: 0, isTrusted: true });
+  const key = h.messages.pop().key;
+  assert.deepEqual(JSON.parse(key), ['chatgpt-nav-v1', 'new-chat', CHAT_PROJECT_A]);
+  const entries = learning.remember([], h.location.origin, key, h.location.origin + '/g/' + CHAT_PROJECT_A + '/project');
+  const next = chatProject(CHAT_PROJECT_A, 'Renamed');
+  next.section.attrs.id = 'different-section-after-reorder';
+  next.section.attrs['aria-label'] = 'Pinned';
+  next.nav.attrs['aria-label'] = 'Project';
+  const loaded = harness('chatgpt.com', { root: next.root, entries, topFrame: true, siteAllowed: true });
+  loaded.location.pathname = '/c/different';
+  next.button.click = () => assert.fail('must reuse the stored destination');
+  await flush(); loaded.dispatch(next.icon); await flush();
+  assert.deepEqual(loaded.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+  assert.equal(loaded.messages[0].url, h.location.origin + '/g/' + CHAT_PROJECT_A + '/project');
+  loaded.dispatch(next.icon, 'click', { button: 0, isTrusted: true });
+  assert.equal(loaded.messages.at(-1).key, key);
+});
+
+test('ChatGPT same-name projects retain different action keys and keep action menus separate', () => {
+  const a = chatProject(CHAT_PROJECT_A), b = chatProject(CHAT_PROJECT_B);
+  a.nav.children.push(b.section); b.section.parentElement = a.nav;
+  const h = harness('chatgpt.com', { root: a.root });
+  h.dispatch(a.icon, 'click', { button: 0, isTrusted: true });
+  h.dispatch(b.icon, 'click', { button: 0, isTrusted: true });
+  assert.notEqual(h.messages[0].key, h.messages[1].key);
+  h.dispatch(a.row, 'click', { button: 0, isTrusted: true });
+  assert.deepEqual(JSON.parse(h.messages.at(-1).key), ['chatgpt-nav-v1', 'project', CHAT_PROJECT_A]);
+  const menu = new Element('button', { 'aria-label': 'Same のプロジェクトアクション', 'aria-haspopup': 'menu' });
+  a.row.children.push(menu); menu.parentElement = a.row;
+  h.dispatch(menu, 'click', { button: 0, isTrusted: true });
+  assert.equal(h.messages.at(-1).type, 'cancelNavigationLearning');
+});
+
+test('ChatGPT global text-only and labelled New chat share existing legacy mappings across pages', async () => {
+  const top = new Element('button'); top.text = '新しいチャット';
+  const recent = new Element('button', { 'aria-label': '新しいチャット' });
+  const nav = new Element('nav', { 'aria-label': 'ホーム' }, [top, new Element('section', { 'aria-label': 'Recent' }, [recent])]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  const old = JSON.stringify(['v1', 'button', '', [], '新しいチャット', ['nav', 'ホーム', ''], '/old-page']);
+  const entries = learning.remember([], 'https://chatgpt.com', JSON.stringify(['section-v1', old, 'old-context']), 'https://chatgpt.com/', Date.now() - 7 * 86400000);
+  const h = harness('chatgpt.com', { root, entries, topFrame: true });
+  h.location.pathname = '/c/unseen-page';
+  top.click = recent.click = () => assert.fail('must not rediscover');
+  await flush();
+  for (const target of [top, recent]) { h.advance(); h.dispatch(target); }
+  assert.deepEqual(h.messages.map(m => [m.type, m.url]), [
+    ['maybeOpenOnMiddle', 'https://chatgpt.com/'], ['maybeOpenOnMiddle', 'https://chatgpt.com/'],
+  ]);
+});
+
+test('ChatGPT project New chat reuses old page-specific records without migrating storage', async () => {
+  const item = chatProject();
+  const old = JSON.stringify(['v1', 'button', '', [], 'Same で新しいチャット', ['nav', 'ホーム', ''], '/old-session']);
+  const url = 'https://chatgpt.com/g/' + CHAT_PROJECT_A + '/project';
+  const entries = learning.remember([], 'https://chatgpt.com', old, url);
+  const h = harness('chatgpt.com', { root: item.root, entries });
+  item.button.click = () => assert.fail('must reuse legacy record');
+  await flush(); h.dispatch(item.icon);
+  assert.deepEqual(h.messages.map(m => [m.type, m.url]), [['maybeOpenOnMiddle', url]]);
+});
+
+test('ChatGPT action specialization excludes other hosts, main content and invalid project IDs', () => {
+  for (const kind of ['host', 'main', 'id']) {
+    const item = chatProject(kind === 'id' ? 'not-a-project' : CHAT_PROJECT_A);
+    if (kind === 'main') { const main = new Element('main', {}, [item.nav]); new Element('html', {}, [new Element('body', {}, [main])]); }
+    const h = harness(kind === 'host' ? 'example.com' : 'chatgpt.com', { root: rootOf(item.button) });
+    h.dispatch(item.icon, 'click', { button: 0, isTrusted: true });
+    assert.equal(JSON.parse(h.messages.at(-1).key)[0], 'v1', kind);
+  }
+});
+
+test('an early middle click waits for saved destinations before prompting or discovering', async () => {
+  for (const kind of ['loaded', 'cancelled', 'navigated']) {
+    let finish, prompts = 0, clicks = 0;
+    const item = chatProject(); item.button.click = () => clicks++;
+    const h = harness('chatgpt.com', { root: item.root, topFrame: true, confirm() { prompts++; return true; },
+      loadEntries: () => new Promise(resolve => { finish = resolve; }) });
+    h.dispatch(item.icon, 'pointerdown'); h.dispatch(item.icon, 'mousedown');
+    await flush();
+    assert.equal(h.messages.length, 0);
+    if (kind === 'cancelled') h.dispatch(item.icon, 'keydown', { isTrusted: true });
+    if (kind === 'navigated') h.location.pathname = '/c/changed';
+    const key = JSON.stringify(['chatgpt-nav-v1', 'new-chat', CHAT_PROJECT_A]);
+    const entries = learning.remember([], h.location.origin, key, h.location.origin + '/g/' + CHAT_PROJECT_A + '/project');
+    finish({ [learning.STORAGE_KEY]: { version: 1, entries } }); await flush();
+    assert.equal(prompts, 0); assert.equal(clicks, 0);
+    assert.equal(h.messages.filter(m => m.type === 'maybeOpenOnMiddle').length, kind === 'loaded' ? 1 : 0);
+    assert.equal(h.messages.some(m => m.type === 'beginSiteNavigationProbe'), false);
+  }
+});
+
+function driveItem(role = 'row', id = 'folder_abcdefgh1234', type = '') {
+  const title = new Element('title', {}, [], SVG);
+  title.text = type;
+  const icon = new Element('svg', {}, [title, new Element('path', {}, [], SVG)], SVG);
+  const label = new Element('span', { 'data-id': id }, [icon]);
   const item = new Element('div', { role, 'data-id': id, 'data-target': 'doc',
     'data-selectable': '', tabindex: '-1' }, [label]);
   return { item, label, icon };
 }
 
-test('Drive list and grid items open different unlearned IDs without clicking or discovery', () => {
+function driveHarness(role = 'row', options = {}) {
+  const item = driveItem(role);
+  item.label.attrs['data-tooltip'] = 'name';
+  const root = new Element('html', {}, [new Element('body', {}, [item.item])]);
+  const h = harness('drive.google.com', { root, topFrame: true, ...options });
+  h.location.pathname = '/drive/u/2/my-drive';
+  item.label.onDispatch = event => { if (event.type === 'mousedown') item.item.attrs['aria-selected'] = 'true'; };
+  return { ...h, ...item, root };
+}
+
+test('Drive list/grid delegate one complete middle gesture to the default-open shortcut', async () => {
   for (const role of ['row', 'gridcell']) {
-    const h = harness('drive.google.com');
-    h.location.pathname = '/drive/u/2/my-drive';
-    for (const id of ['folder_abcdefgh1234', 'another_abcdefgh5678']) {
-      const { item, icon } = driveItem(role, id);
-      let clicks = 0;
-      item.click = () => clicks++;
-      for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) {
-        assert.equal(h.dispatch(icon, type).defaultPrevented, true);
-      }
-      assert.equal(clicks, 0);
-      assert.equal(h.messages.at(-1).url, `https://drive.google.com/open?id=${id}&authuser=2`);
-      h.advance();
-    }
-    assert.deepEqual(h.messages.map(message => message.type), ['maybeOpenOnMiddle', 'maybeOpenOnMiddle']);
+    const h = driveHarness(role);
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) assert.equal(h.dispatch(h.icon, type).defaultPrevented, true);
+    await flush();
+    assert.deepEqual(h.messages.map(m => m.type), ['beginDriveDefaultOpen']);
+    assert.equal(h.messages[0].itemId, 'folder_abcdefgh1234');
+    assert.equal(h.messages[0].sourceUrl, h.location.href);
+    assert.equal(h.messages[0].url, undefined);
+    assert.deepEqual(h.label.events.map(e => e.type), ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']);
+    assert.equal(h.item.events.length, 1);
+    assert.equal(h.item.events[0].key, 'Enter');
+    assert.equal(Boolean(h.item.events[0].ctrlKey), false);
+    assert.equal(h.item.events[0].keyCode, 13);
+    assert.equal(h.item.focused, true);
+    h.receive({ type: 'driveOpenFeedback', requestId: h.messages[0].requestId, reason: 'drive-opened' });
+    h.advance(); h.dispatch(h.icon); await flush();
+    assert.equal(h.item.events.length, 2);
   }
 });
 
-test('Drive account context comes from the current path or authuser query', () => {
-  for (const [path, search, account] of [
-    ['/drive/u/0/folders/parent_1234567890', '?authuser=3', '0'],
-    ['/drive/my-drive', '?authuser=3', '3'],
-    ['/drive/folders/parent_1234567890', '?authuser=person%40example.com', 'person@example.com'],
-    ['/drive/my-drive', '', null],
-  ]) {
-    const h = harness('drive.google.com');
-    h.location.pathname = path;
-    h.location.search = search;
-    h.dispatch(driveItem().icon);
-    const url = new URL(h.messages[0].url);
-    assert.equal(url.searchParams.get('authuser'), account);
-    assert.equal(url.searchParams.get('id'), 'folder_abcdefgh1234');
+test('Drive uses current account and default app without filename, type or URL guesses', async () => {
+  for (const [path, search] of [['/drive/u/0/my-drive', '?authuser=3'], ['/drive/my-drive', '?authuser=person%40example.com'], ['/drive/folders/parent_1234567890', '']]) {
+    const h = driveHarness(); h.location.pathname = path; h.location.search = search; h.label.text = 'notes.md';
+    h.dispatch(h.icon); await flush();
+    assert.equal(h.messages[0].sourceUrl, h.location.href);
+    assert.equal(h.messages[0].url, undefined);
+    assert.equal(Boolean(h.item.events[0].ctrlKey), false);
   }
 });
 
-test('Drive row actions cannot borrow the item ID, and normal clicks are not activated', () => {
-  const { item, icon } = driveItem();
+test('Drive nested controls, ordinary left clicks and modified middle clicks retain their behavior', () => {
+  const h = driveHarness();
   const owner = new Element('div', { role: 'button', tabindex: '-1' });
   const menu = new Element('button', { 'aria-haspopup': 'menu' });
-  item.children.push(owner, menu);
-  owner.parentElement = menu.parentElement = item;
-  const root = new Element('html', {}, [new Element('body', {}, [item])]);
-  const h = harness('drive.google.com', { root });
-  h.location.pathname = '/drive/u/0/my-drive';
-  let clicks = 0;
-  item.click = () => clicks++;
-  h.dispatch(owner);
-  h.dispatch(menu);
-  assert.equal(h.messages.some(message => message.type === 'maybeOpenOnMiddle'), false);
+  h.item.children.push(owner, menu); owner.parentElement = menu.parentElement = h.item;
+  h.dispatch(owner); h.dispatch(menu); h.dispatch(h.icon, 'mousedown', { ctrlKey: true });
+  assert.equal(h.messages.some(m => m.type === 'beginDriveDefaultOpen'), false);
   h.messages.length = 0;
-  assert.equal(h.dispatch(icon, 'click', { button: 0, isTrusted: true }).defaultPrevented, undefined);
-  assert.deepEqual(h.messages.map(message => message.type), ['cancelNavigationLearning']);
-  assert.equal(clicks, 0);
+  assert.equal(h.dispatch(h.icon, 'click', { button: 0, isTrusted: true }).defaultPrevented, undefined);
+  assert.deepEqual(h.messages.map(m => m.type), ['cancelNavigationLearning']);
+  assert.equal(h.item.events, undefined);
 });
 
-test('Drive ID detection is limited to HTTPS Drive item rows and cells', () => {
-  for (const kind of ['host', 'subdomain', 'http', 'path', 'role', 'target', 'selectable', 'id', 'form', 'disabled']) {
-    const host = kind === 'host' ? 'example.com' : kind === 'subdomain' ? 'drive.google.com.example.com' : 'drive.google.com';
-    const h = harness(host);
-    h.location.pathname = kind === 'path' ? '/file/d/abcdefgh1234/view' : '/drive/u/0/my-drive';
-    const { item, icon } = driveItem();
+test('Drive detection is restricted to top-level HTTPS selectable item controls', () => {
+  for (const kind of ['host', 'subdomain', 'http', 'path', 'role', 'target', 'selectable', 'id', 'form', 'disabled', 'frame', 'editable']) {
+    const h = driveHarness('row', { topFrame: kind !== 'frame' });
+    if (kind === 'host') h.location.hostname = 'example.com';
+    if (kind === 'subdomain') h.location.hostname = 'drive.google.com.example.com';
     if (kind === 'http') h.location.protocol = 'http:';
-    if (kind === 'role') item.attrs.role = 'button';
-    if (kind === 'target') item.attrs['data-target'] = 'node';
-    if (kind === 'selectable') delete item.attrs['data-selectable'];
-    if (kind === 'id') item.attrs['data-id'] = '../not-an-id?';
-    if (kind === 'form') new Element('form', {}, [item]);
-    if (kind === 'disabled') item.attrs['aria-disabled'] = 'true';
-    h.dispatch(icon);
-    assert.equal(h.messages.some(message => message.type === 'maybeOpenOnMiddle'), false, kind);
+    if (kind === 'path') h.location.pathname = '/file/d/abcdefgh1234/view';
+    if (kind === 'role') h.item.attrs.role = 'button';
+    if (kind === 'target') h.item.attrs['data-target'] = 'node';
+    if (kind === 'selectable') delete h.item.attrs['data-selectable'];
+    if (kind === 'id') h.item.attrs['data-id'] = '../not-an-id?';
+    if (kind === 'form') new Element('form', {}, [h.item]);
+    if (kind === 'disabled') h.item.attrs['aria-disabled'] = 'true';
+    if (kind === 'editable') h.label.attrs.contenteditable = 'true';
+    h.dispatch(h.icon);
+    assert.equal(h.messages.some(m => m.type === 'beginDriveDefaultOpen'), false, kind);
   }
 });
 
+test('Drive denied acknowledgements, stale source/item and user cancellation never execute', async () => {
+  for (const kind of ['denied', 'rejected', 'source', 'id', 'cancel']) {
+    let finish;
+    const h = driveHarness('row', { driveAcknowledge: () => kind === 'rejected' ? Promise.reject(new Error()) : new Promise(resolve => { finish = resolve; }) });
+    h.dispatch(h.icon);
+    if (kind === 'source') h.location.pathname = '/drive/home';
+    if (kind === 'id') h.item.attrs['data-id'] = 'different_1234567890';
+    if (kind === 'cancel') h.dispatch(h.icon, 'keydown', { isTrusted: true });
+    finish?.({ ok: kind !== 'denied' }); await flush();
+    assert.equal(h.label.events, undefined, kind);
+    assert.equal(h.item.events, undefined, kind);
+  }
+});
+
+test('Drive selection failure, multi-selection and missing labels never open a guessed fallback', async () => {
+  for (const kind of ['selection', 'multiple', 'label']) {
+    const h = driveHarness();
+    if (kind === 'selection') h.label.onDispatch = () => {};
+    if (kind === 'multiple') {
+      const other = driveItem(); other.item.attrs['aria-selected'] = 'true';
+      h.item.parentElement.children.push(other.item); other.item.parentElement = h.item.parentElement;
+    }
+    if (kind === 'label') delete h.label.attrs['data-tooltip'];
+    h.dispatch(h.icon); await flush();
+    assert.equal(h.item.events, undefined, kind);
+    assert.ok(h.messages.some(m => m.type === 'cancelDriveDefaultOpen'));
+    assert.ok(h.notices.includes('drive-open-failed'));
+    assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false);
+  }
+});
+
+test('Drive busy gestures and stale feedback cannot open a second tab', async () => {
+  const h = driveHarness(); h.dispatch(h.icon); await flush();
+  h.advance(); h.dispatch(h.icon); await flush();
+  assert.equal(h.item.events.length, 1);
+  assert.ok(h.notices.includes('busy'));
+  const first = h.messages[0].requestId;
+  h.receive({ type: 'driveOpenFeedback', requestId: first, reason: 'drive-opened' });
+  h.advance(); h.dispatch(h.icon); await flush();
+  h.receive({ type: 'driveOpenFeedback', requestId: first, reason: 'drive-open-failed' });
+  h.advance(); h.dispatch(h.icon); await flush();
+  assert.equal(h.item.events.length, 2);
+});
+
+test('Drive only reopens in preview mode after the normal action shows a visible preview', async () => {
+  const h = driveHarness();
+  let visible = false, closed = 0;
+  const frame = new Element('iframe');
+  frame.src = 'https://drive.google.com/viewer/main?source=10';
+  frame.checkVisibility = () => visible;
+  const close = new Element('button'); close.checkVisibility = () => true;
+  close.onDispatch = e => { if (e.type === 'click') { visible = false; closed++; } };
+  frame.contentDocument = { querySelector: () => close };
+  h.root.children[0].children.push(frame); frame.parentElement = h.root.children[0];
+  h.item.onDispatch = e => { if (!e.ctrlKey) visible = true; };
+  h.dispatch(h.icon); await flush();
+  assert.equal(h.item.events.length, 2);
+  assert.equal(Boolean(h.item.events[0].ctrlKey), false);
+  assert.equal(h.item.events[1].ctrlKey, true);
+  assert.equal(closed, 1);
+  assert.equal(visible, false);
+});
+
+test('Drive leaves an already-open preview alone instead of replaying a hidden item', () => {
+  const h = driveHarness();
+  const frame = new Element('iframe'); frame.src = 'https://drive.google.com/viewer/main';
+  frame.checkVisibility = () => true;
+  h.root.children[0].children.push(frame); frame.parentElement = h.root.children[0];
+  h.dispatch(h.icon);
+  assert.equal(h.messages.length, 0);
+  assert.ok(h.notices.includes('drive-open-failed'));
+});
+
+test('Drive uses the parent close control when the preview toolbar is in an iframe', async () => {
+  const h = driveHarness(); let visible = false;
+  const frame = new Element('iframe'); frame.src = 'https://drive.google.com/viewer/main';
+  frame.checkVisibility = () => visible;
+  frame.contentDocument = null;
+  h.root.children[0].children.push(frame); frame.parentElement = h.root.children[0];
+  const close = { click() { visible = false; } };
+  h.document.querySelector = () => close;
+  h.item.onDispatch = e => { if (!e.ctrlKey) visible = true; };
+  h.dispatch(h.icon); await flush();
+  assert.equal(h.item.events.length, 2);
+  assert.equal(h.item.events[1].ctrlKey, true);
+  assert.equal(visible, false);
+});
 test('a control cannot borrow another navigation item URL from a broad ancestor', () => {
   const unknown = iconButton();
   unknown.button.parentElement.children.push(new Element('a', { href: '/unrelated' }));

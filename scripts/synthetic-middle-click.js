@@ -13,7 +13,10 @@ async function syntheticMiddleClick(element) {
   }
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) throw new Error('Target is not visible.');
-  const target = element.querySelector('use') || element.querySelector('svg') || element.querySelector('img') || element;
+  const itemLabel = driveItem ? [...element.querySelectorAll('[data-id][data-tooltip]')].find(node =>
+    node.getAttribute('data-id') === element.getAttribute('data-id')) : null;
+  const content = itemLabel || element;
+  const target = content.querySelector('use') || content.querySelector('svg') || content.querySelector('img') || content;
   const base = {
     bubbles: true, cancelable: true, composed: true, button: 1,
     clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2

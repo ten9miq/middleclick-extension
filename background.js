@@ -2,6 +2,7 @@
 
 importScripts("navigation-learning.js");
 importScripts("navigation-probe.js");
+importScripts("drive-opening.js");
 
 function setupContextMenu() {
   chrome.contextMenus.create({ id: "openInNewTab", title: "New Tab", contexts: ["all"] });
@@ -272,3 +273,39 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 const navigationProbes = MiddleClickProbe.install({ chrome, learning: MiddleClickLearning, save: updateLearning,
   open: createBackgroundTabNextToSource, cancelPassive: cancelLearning, isSiteAllowed: isSiteLearningAllowed });
+
+async function adoptDriveTab(tab, record) {
+  const source = await chrome.tabs.get(record.sourceTab.id);
+  if (source.url !== record.sourceUrl || source.windowId !== tab.windowId) throw new Error('Drive source changed');
+  const current = await chrome.tabs.get(tab.id);
+  // Restore focus only if Drive's new tab took it. Respect a user's switch to
+  // another tab while an asynchronous default application was opening.
+  if (current.active && record.sourceTab.active) await chrome.tabs.update(source.id, { active: true });
+  await chrome.tabs.move(tab.id, { index: source.index + (current.index < source.index ? 0 : 1) });
+  await inheritSourceTabGroup(current, source);
+}
+async function reopenDriveNavigation(record, destination, stillCurrent) {
+  if (!stillCurrent()) return;
+  const restored = await chrome.tabs.sendMessage(record.sourceTab.id, { type: 'restoreConfirmedNavigationProbe',
+    sourceUrl: record.sourceUrl, entryKey: record.entryKey }, { frameId: 0 }).catch(() => null);
+  let exact = Boolean(restored?.traversing);
+  if (!exact && stillCurrent()) await chrome.tabs.update(record.sourceTab.id, { url: record.sourceUrl });
+  for (let attempt = 0; attempt < 50 && stillCurrent(); attempt++) {
+    const source = await chrome.tabs.get(record.sourceTab.id);
+    if (source.url === record.sourceUrl) {
+      const entry = exact ? await chrome.tabs.sendMessage(source.id, { type: 'readConfirmedNavigationEntry' }, { frameId: 0 }).catch(() => null) : null;
+      if (!exact || entry?.entryKey === record.entryKey) {
+        if (stillCurrent()) await createBackgroundTabNextToSource(destination, source);
+        return;
+      }
+    }
+    if (attempt === 19 && exact) {
+      if (!stillCurrent()) return;
+      await chrome.tabs.update(record.sourceTab.id, { url: record.sourceUrl });
+      exact = false;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('Could not restore Drive source');
+}
+MiddleClickDrive.install({ chrome, adopt: adoptDriveTab, navigate: reopenDriveNavigation, cancelPassive: cancelLearning });

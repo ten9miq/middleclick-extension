@@ -5,6 +5,21 @@
   const SITE_PERMISSION_KEY = "middleclickSiteLearningPermissionsV1";
   const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
   const MAX_ENTRIES = 500;
+  const ENTITY_ATTRIBUTE = /^data-(?:account|tenant|organization|org|workspace|project|space|board|folder|collection|conversation|thread|chat|document|file|record|row|item|entity|resource)-(?:id|key)$/;
+
+  function entityIds(attributes) {
+    const result = [];
+    for (const attr of attributes ?? []) {
+      if (!ENTITY_ATTRIBUTE.test(attr.name)) continue;
+      const value = attr.value;
+      // Bare row numbers and common generated UI IDs are not ownership proof.
+      if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9_.:-]{1,159}$/i.test(value) || !/[a-z]/i.test(value) ||
+        /^(?:true|false|null|undefined|none|default|unknown)$/i.test(value) ||
+        /^(?:radix[-_:]|react[-_:]|headlessui[-_:]|mui[-_:]|rc[-_:]|(?:row|item|index)[-_:]?\d+$)/i.test(value)) return null;
+      result.push([attr.name, value]);
+    }
+    return result.sort((a, b) => a[0].localeCompare(b[0]));
+  }
 
   function webUrl(value, base) {
     try {
@@ -84,6 +99,84 @@
     return urls.size === 1 ? matches[0].url : null;
   }
 
+  function ownedIdentity(key) {
+    try {
+      const wrapper = JSON.parse(key);
+      if (!Array.isArray(wrapper) || wrapper.length !== 3 || wrapper[0] !== 'owned-v1' ||
+        !Array.isArray(wrapper[2]) || !wrapper[2].length || wrapper[2].length > 32) return null;
+      const base = JSON.parse(wrapper[1]);
+      if (!Array.isArray(base) || base.length !== 7 || base[0] !== 'v1' ||
+        typeof base[1] !== 'string' || typeof base[2] !== 'string' || !Array.isArray(base[3]) ||
+        typeof base[4] !== 'string' || !Array.isArray(base[5]) || typeof base[6] !== 'string' || !base[6].startsWith('/')) return null;
+      const own = entityIds(base[3].map(([name, value]) => ({ name, value })));
+      if (!own?.length) return null;
+      for (const owner of wrapper[2]) {
+        if (!Array.isArray(owner) || !owner.length || owner.some(pair => !Array.isArray(pair) || pair.length !== 2)) return null;
+        const ids = entityIds(owner.map(([name, value]) => ({ name, value })));
+        if (!ids || ids.length !== owner.length || new Set(ids.map(pair => pair[0])).size !== ids.length) return null;
+      }
+      const ownValues = new Set(own.map(pair => pair[1]));
+      if (!wrapper[2].some(owner => owner.some(pair => !ownValues.has(pair[1])))) return null;
+      const source = webUrl(base[6], 'https://owned.invalid');
+      if (!source || source.origin !== 'https://owned.invalid') return null;
+      // Query and hash can encode selection/filter/account state. Only the
+      // pathname is eligible for cross-page reuse.
+      base[6] = JSON.stringify([source.search, source.hash]);
+      return JSON.stringify(['owned-v1', base, wrapper[2]]);
+    } catch { return null; }
+  }
+
+  function lookupOwned(entries, origin, key, now = Date.now()) {
+    const identity = ownedIdentity(key);
+    if (!identity) return null;
+    const valid = clean({ version: 1, entries }, now).filter(entry => entry.origin === origin);
+    // Preserve a known exact-page observation, including a conflict blocking
+    // that exact key. Never fall back to owner-free legacy keys.
+    if (valid.some(entry => entry.key === key)) return lookup(valid, origin, key, now);
+    const matches = valid.filter(entry => ownedIdentity(entry.key) === identity);
+    if (matches.length < 2 || matches.some(entry => entry.ambiguous) ||
+      new Set(matches.map(entry => entry.key)).size !== matches.length) return null;
+    return new Set(matches.map(entry => entry.url)).size === 1 ? matches[0].url : null;
+  }
+
+  function lookupChatGPT(entries, origin, key, label, now = Date.now()) {
+    if (!/^https:\/\/(?:www\.)?chatgpt\.com$/.test(origin)) return null;
+    let identity;
+    try { identity = JSON.parse(key); } catch { return null; }
+    if (!Array.isArray(identity) || identity.length !== 3 || identity[0] !== 'chatgpt-nav-v1' ||
+      !['new-chat', 'project'].includes(identity[1]) || typeof identity[2] !== 'string' ||
+      (identity[2] && !/^g-p-[0-9a-f]{32}$/i.test(identity[2])) || (identity[1] === 'project' && !identity[2])) return null;
+    const valid = clean({ version: 1, entries }, now).filter(entry => entry.origin === origin);
+    // A canonical conflict must not be bypassed using an older alias.
+    if (valid.some(entry => entry.key === key)) return lookup(valid, origin, key, now);
+    const projectId = identity[2];
+    const matches = valid.filter(entry => {
+      let old;
+      try {
+        old = JSON.parse(entry.key);
+        if (Array.isArray(old) && old[0] === 'section-v1' && old.length === 3) old = JSON.parse(old[1]);
+      } catch { return false; }
+      if (!Array.isArray(old) || old.length !== 7 || old[0] !== 'v1' || !Array.isArray(old[3]) ||
+        !Array.isArray(old[5]) || !['nav', 'aside'].includes(old[5][0]) || typeof old[4] !== 'string') return false;
+      if (identity[1] === 'project') {
+        if (!old[3].some(attr => Array.isArray(attr) && attr[0] === 'data-app-action-sidebar-project-id' && attr[1] === projectId)) return false;
+      } else {
+        if (old[1] !== 'button' || old[3].length) return false;
+        if (projectId ? old[4] !== label :
+          !/^(?:新しいチャット|New chat)$/i.test(old[4]) || !/^(?:ホーム|Home)$/i.test(old[5][1] || '')) return false;
+      }
+      if (entry.ambiguous) return true;
+      const destination = webUrl(entry.url);
+      if (!projectId) return true;
+      const segment = destination?.pathname.split('/')[2];
+      return destination?.pathname.startsWith('/g/') && (segment === projectId || segment?.startsWith(projectId + '-'));
+    });
+    if (!matches.length || matches.some(entry => entry.ambiguous) ||
+      new Set(matches.map(entry => entry.key)).size !== matches.length) return null;
+    if (!projectId && matches.some(entry => webUrl(entry.url)?.pathname !== '/')) return null;
+    return new Set(matches.map(entry => entry.url)).size === 1 ? matches[0].url : null;
+  }
+
   function siteOrigins(value) {
     if (value?.version !== 1 || !Array.isArray(value.origins)) return [];
     return [...new Set(value.origins.filter(origin => {
@@ -106,7 +199,8 @@
   }
 
   const api = Object.freeze({ STORAGE_KEY, SITE_PERMISSION_KEY, MAX_AGE_MS, MAX_ENTRIES,
-    webUrl, learnableUrl, clean, remember, lookup, lookupAcrossPaths, siteOrigins, siteAllowed, setSiteAllowed });
+    webUrl, learnableUrl, clean, remember, lookup, lookupAcrossPaths, lookupChatGPT, entityIds, lookupOwned,
+    siteOrigins, siteAllowed, setSiteAllowed });
   globalThis.MiddleClickLearning = api;
   if (typeof module !== "undefined") module.exports = api;
 })();

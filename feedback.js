@@ -3,6 +3,7 @@
   let host;
   let timer;
   const messages = {
+    'drive-open-failed': 'Driveの既定の開き方で別タブを開けませんでした。タブの状態を確認し、通常のダブルクリックを使ってください。',
     checking: "移動先を確認しています。移動後に元のページへ戻ります。",
     opened: "元のページへ戻り、移動先を別タブで開きました。",
     unavailable: "この対象は自動学習できません。通常の左クリックを使ってください。",

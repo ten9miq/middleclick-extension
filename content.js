@@ -31,11 +31,14 @@
   const RESOURCE_DATA_KEY = /(?:^|-)(?:icon|sprite|image|thumbnail|avatar|asset|background)(?:-|$)/i;
   let learnedEntries = [];
   let learnedRevision = 0;
+  let learningReady = Promise.resolve();
   let requestSequence = 0;
   let lastHandledMiddle = { url: '', time: 0 };
   let lastProbeGesture = { control: null, time: 0 };
   let activeProbe = false;
   let probeAttempt = 0;
+  let driveOpen = null;
+  let lastDriveGesture = { control: null, time: 0 };
 
   function normalizeText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -276,8 +279,6 @@
 
   function staticUrl(e, control = clickControl(e)) {
     if (blockedControl(control, e.target)) return null;
-    const driveUrl = driveItemDestination(control);
-    if (driveUrl) return driveUrl;
     const elements = scopedElements(e, control);
     for (const element of elements) {
       const url = urlFromElementAttributes(element);
@@ -288,23 +289,108 @@
     return uniqueDescendantUrl(control || elements[0]);
   }
 
-  function driveItemDestination(control) {
-    // Drive list rows and grid cells expose an item ID, not an href. The
-    // /open endpoint resolves both files and folders without guessing a type
-    // from localized labels or icon artwork. Never borrow a parent item's ID
-    // when the clicked control is its owner button, toolbar, or action menu.
+  function driveItemId(control) {
     if (location.origin !== 'https://drive.google.com' || !/^\/drive(?:\/|$)/.test(location.pathname) ||
       !control || !/^(row|gridcell)$/.test(control.getAttribute('role') || '') ||
       control.getAttribute('data-target') !== 'doc' || !control.hasAttribute('data-selectable') ||
-      control.closest('form') || control.form) return null;
+      blockedControl(control, control) || control.closest('form') || control.form) return null;
     const id = control.getAttribute('data-id') || '';
-    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return null;
-    const url = new URL('https://drive.google.com/open');
-    url.searchParams.set('id', id);
-    const account = location.pathname.match(/^\/drive\/u\/(\d+)(?:\/|$)/)?.[1] ||
-      new URLSearchParams(location.search).get('authuser');
-    if (account) url.searchParams.set('authuser', account);
-    return url.href;
+    return /^[A-Za-z0-9_-]{10,200}$/.test(id) ? id : null;
+  }
+
+  function cancelDriveOpen() {
+    if (!driveOpen) return;
+    sendMessage({ type: 'cancelDriveDefaultOpen', requestId: driveOpen.requestId });
+    driveOpen = null;
+  }
+
+  function visibleDrivePreview() {
+    return [...document.querySelectorAll('iframe')].find(frame => {
+      try {
+        const url = new URL(frame.src);
+        return url.origin === location.origin && url.pathname === '/viewer/main' && frame.checkVisibility() &&
+          frame.getBoundingClientRect().width > 0;
+      } catch { return false; }
+    });
+  }
+
+  function driveLeftClick(target) {
+    const rect = target.getBoundingClientRect();
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      const EventType = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+      target.dispatchEvent(new EventType(type, { bubbles: true, cancelable: true, composed: true,
+        button: 0, buttons: type.endsWith('down') ? 1 : 0, detail: 1,
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }));
+    }
+  }
+
+  function requestDriveOpen(e) {
+    const control = clickControl(e);
+    const itemId = driveItemId(control);
+    if (!itemId || blockedControl(control, e.target) || window !== top) return false;
+    suppressEvent(e);
+    const now = performance.now();
+    if (lastDriveGesture.control === control && now - lastDriveGesture.time < 120) return true;
+    lastDriveGesture = { control, time: now };
+    if (driveOpen) { notify('busy'); return true; }
+    if (visibleDrivePreview()) { notify('drive-open-failed'); return true; }
+    const request = { requestId: Date.now() + ':' + (++requestSequence), sourceUrl: location.href, itemId,
+      entryKey: window.navigation?.currentEntry?.key || '' };
+    driveOpen = request;
+    Promise.resolve(chrome.runtime.sendMessage({ type: 'beginDriveDefaultOpen', ...request })).then(async response => {
+      if (driveOpen !== request) return;
+      if (!response?.ok || location.href !== request.sourceUrl || !control.isConnected || driveItemId(control) !== itemId) {
+        cancelDriveOpen(); notify('drive-open-failed'); return;
+      }
+      // Select only this item, then let Drive choose the current default app.
+      // The label is bound to the same ID; nested action buttons are excluded.
+      const target = [...control.querySelectorAll('[data-id]')].find(el =>
+        el.getAttribute('data-id') === itemId && el.hasAttribute('data-tooltip'));
+      if (!target) { cancelDriveOpen(); notify('drive-open-failed'); return; }
+      driveLeftClick(target);
+      // Drive updates its keyboard selection after processing the mouse action.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      if (driveOpen !== request) return;
+      if (location.href !== request.sourceUrl || !control.isConnected || driveItemId(control) !== itemId) {
+        cancelDriveOpen(); notify('drive-open-failed'); return;
+      }
+      const selected = document.querySelectorAll('[data-target="doc"][data-selectable][aria-selected="true"]');
+      if (control.getAttribute('aria-selected') !== 'true' || selected.length !== 1) {
+        cancelDriveOpen(); notify('drive-open-failed'); return;
+      }
+      control.focus({ preventScroll: true });
+      control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true,
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+      // Ctrl+Enter alone forces a preview even for Markdown with a Docs default.
+      // Use it only after the normal Open action actually produced a preview.
+      for (let attempt = 0; attempt < 60 && driveOpen === request; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (driveOpen !== request || location.href !== request.sourceUrl) return;
+        const preview = visibleDrivePreview();
+        if (!preview) continue;
+        // Drive's parent-page close control also handles the embedded viewer;
+        // it remains in the DOM while the iframe owns the visible toolbar.
+        const parentClose = document.querySelector('button.wIYhq[aria-label]');
+        const close = parentClose || preview.contentDocument?.querySelector('button[jsname="plIjzf"]');
+        if (!close || (!parentClose && !close.checkVisibility())) continue;
+        if (parentClose) parentClose.click();
+        else driveLeftClick(close);
+        for (let closing = 0; closing < 20 && driveOpen === request && visibleDrivePreview(); closing++) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        if (driveOpen !== request) return;
+        if (visibleDrivePreview() || !control.isConnected || driveItemId(control) !== itemId ||
+          control.getAttribute('aria-selected') !== 'true') {
+          cancelDriveOpen(); notify('drive-open-failed'); return;
+        }
+        control.focus({ preventScroll: true });
+        control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true,
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey: true }));
+        return;
+      }
+    }).catch(() => { if (driveOpen === request) { cancelDriveOpen(); notify('drive-open-failed'); } });
+    return true;
   }
 
   function codexDestination(control) {
@@ -333,11 +419,44 @@
     return key.length <= 2048 ? key : null;
   }
 
+  function chatgptNavigationKey(control) {
+    if (!isChatGPTHost() || location.protocol !== 'https:' || !control || blockedControl(control, control) || control.closest('form') || control.form ||
+      control.closest('main, [role="main"]')) return null;
+    const region = control.parentElement?.closest('nav, aside, [role="navigation"]');
+    if (!region) return null;
+    const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent);
+    const project = control.closest('[data-app-action-sidebar-project-id], [data-sidebar-project-container-id]');
+    const projectId = project?.getAttribute('data-app-action-sidebar-project-id') ||
+      project?.getAttribute('data-sidebar-project-container-id')?.replace(/^project:/, '') || '';
+    if (project && !/^g-p-[0-9a-f]{32}$/i.test(projectId)) return null;
+    if (control === project && control.hasAttribute('data-app-action-sidebar-project-row')) {
+      return JSON.stringify(['chatgpt-nav-v1', 'project', projectId]);
+    }
+    if (control.tagName.toLowerCase() !== 'button') return null;
+    if (!project && !/^(?:ホーム|Home)$/i.test(region.getAttribute('aria-label') || '')) return null;
+    const newChat = /^(?:新しいチャット|New chat)$/i.test(label);
+    const projectNewChat = /(?: で新しいチャット$|^New chat in .+$)/i.test(label);
+    if (!newChat && !(project && projectNewChat)) return null;
+    return JSON.stringify(['chatgpt-nav-v1', 'new-chat', projectId]);
+  }
+
   function uniqueLearningKey(control) {
+    // Equivalent New chat buttons share an action. Project IDs identify their
+    // owner across reorder, rename and source-page changes, without URL guesses.
+    const chatgptKey = chatgptNavigationKey(control);
+    if (chatgptKey) return chatgptKey;
     const key = fingerprint(control);
     if (!key) return null;
+    const owned = ownedLearningKey(control, key);
     const candidates = document.querySelectorAll(CLICKABLE_SELECTOR);
     if (candidates.length > 1000) return null;
+    if (owned) {
+      const matches = [...candidates].filter(candidate => {
+        const base = fingerprint(candidate);
+        return base === key && ownedLearningKey(candidate, base) === owned;
+      });
+      return matches.length === 1 ? owned : null;
+    }
     const matches = [...candidates].filter(candidate => fingerprint(candidate) === key);
     if (matches.length === 1) return key; // Keep existing unambiguous cache keys.
     if (matches.length === 0) return null;
@@ -349,6 +468,25 @@
     if (matches.filter(candidate => sectionContext(candidate) === context).length !== 1) return null;
     const refined = JSON.stringify(['section-v1', key, context]);
     return refined.length <= 2048 ? refined : null;
+  }
+
+  function ownedLearningKey(control, key) {
+    const ownIds = MiddleClickLearning.entityIds(control.attributes);
+    if (!ownIds?.length) return null;
+    const owners = [];
+    let ancestor = control.parentElement;
+    for (let depth = 0; ancestor && depth < 32; depth++, ancestor = ancestor.parentElement) {
+      const ids = MiddleClickLearning.entityIds(ancestor.attributes);
+      if (!ids) return null;
+      if (ids.length) owners.push(ids);
+    }
+    if (ancestor || !owners.length) return null;
+    const ownValues = new Set(ownIds.map(pair => pair[1]));
+    if (!owners.some(owner => owner.some(pair => !ownValues.has(pair[1])))) return null;
+    const base = JSON.parse(key);
+    base[6] = location.pathname + location.search + location.hash;
+    const owned = JSON.stringify(['owned-v1', JSON.stringify(base), owners]);
+    return owned.length <= 2048 ? owned : null;
   }
 
   function sectionContext(control) {
@@ -384,6 +522,11 @@
     if (detected) return detected;
     const key = uniqueLearningKey(control);
     if (!key) return null;
+    if (chatgptNavigationKey(control)) {
+      return MiddleClickLearning.lookupChatGPT(learnedEntries, location.origin, key,
+        normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent));
+    }
+    if (key.startsWith('["owned-v1",')) return MiddleClickLearning.lookupOwned(learnedEntries, location.origin, key);
     const saved = MiddleClickLearning.lookup(learnedEntries, location.origin, key);
     if (saved) return saved;
     // Explicit labels in navigation can identify the same destination while
@@ -441,6 +584,16 @@
     const stillCurrent = () => activeProbe && probeAttempt === attempt && location.href === sourceUrl &&
       control.isConnected && uniqueLearningKey(control) === key;
     Promise.resolve().then(async () => {
+      // A first middle click may arrive before storage finishes loading.
+      // Recheck the cache before asking permission or executing a discovery.
+      await learningReady;
+      if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
+      const cached = resolveUrl(e);
+      if (cached) {
+        activeProbe = false;
+        sendMessage({ type: 'maybeOpenOnMiddle', url: cached, requestId: Date.now() + ':' + (++requestSequence) });
+        return;
+      }
       const permission = await chrome.runtime.sendMessage({ type: 'getSiteLearningPermission', origin });
       if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
       if (!permission?.ok) { activeProbe = false; notify('unavailable'); return; }
@@ -482,6 +635,7 @@
 
   function handleResolvedMiddle(e) {
     if (e.button !== 1 || hasMods(e)) return;
+    if (requestDriveOpen(e)) return;
     const url = extensionMiddleUrl(e);
     if (!url) { requestConfirmedProbe(e); return; }
     suppressEvent(e);
@@ -493,6 +647,7 @@
 
   function suppressResolvedMiddle(e) {
     if (e.button === 1 && !hasMods(e) && (extensionMiddleUrl(e) ||
+      (lastDriveGesture.control === clickControl(e) && performance.now() - lastDriveGesture.time < 5000) ||
       (lastProbeGesture.control === clickControl(e) && Date.now() - lastProbeGesture.time < 12000))) suppressEvent(e);
   }
 
@@ -503,7 +658,12 @@
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return;
-    if (message?.type === 'navigationProbeFeedback') {
+    if (message?.type === 'driveOpenFeedback') {
+      if (driveOpen?.requestId === message.requestId) {
+        driveOpen = null;
+        if (message.reason !== 'drive-opened') notify(message.reason);
+      }
+    } else if (message?.type === 'navigationProbeFeedback') {
       activeProbe = false;
       notify(message.reason);
     } else if (message?.type === 'navigationProbeLearned') {
@@ -531,17 +691,18 @@
       learnedEntries = clean(changes[STORAGE_KEY].newValue);
     });
     const initialRevision = learnedRevision;
-    chrome.storage.local.get(STORAGE_KEY).then(data => {
+    learningReady = chrome.storage.local.get(STORAGE_KEY).then(data => {
       if (learnedRevision === initialRevision) learnedEntries = clean(data[STORAGE_KEY]);
     }).catch(() => {});
 
-    const cancel = () => { activeProbe = false; probeAttempt++; sendMessage({ type: 'cancelNavigationLearning' }); };
+    const cancel = () => { cancelDriveOpen(); activeProbe = false; probeAttempt++; sendMessage({ type: 'cancelNavigationLearning' }); };
     document.addEventListener('click', e => {
       if (!e.isTrusted) return;
+      cancelDriveOpen();
       activeProbe = false;
       probeAttempt++;
       const control = clickControl(e);
-      if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || codexDestination(control) || staticUrl(e, control)) {
+      if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || driveItemId(control) || codexDestination(control) || staticUrl(e, control)) {
         cancel();
         return;
       }

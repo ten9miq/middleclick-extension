@@ -5,8 +5,8 @@
 ## 対象と前提条件
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
-- Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.3.2。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
+- Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。Driveの既定動作対応ではbackgroundから読み込む `drive-opening.js` も必要。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.4.0。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`drive-opening.js`、`feedback.js`、`content.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -117,6 +117,35 @@ Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` �
 - 2026-10-27、専用Chrome 155.0.8059.85 / 9223の実サイトで、修正前に保存したプロジェクト新規チャットの記録を使用した。1280×900で、未学習の別セッションとホーム画面から合成中ボタンイベントを実行し、対象のclickイベント0件、Navigation APIの遷移0件、元のentry key維持、右隣のバックグラウンドタブ1件増加、元タブactive維持を確認した。記録の移行・追加学習は不要だった。物理マウス入力の検証ではない。
 - 対象拡張service workerのwarn/errorは0件。ページ側にはサイト由来のStatsigキャッシュ警告があった。検証用タブは閉じ、私的本文・URLを含むログや画像はGitへ保存しない。
 
+## 所属先を使う汎用再利用（2026-11-01）
+
+- 専用Chrome 156.0.8078.74 / 9223のプロセス・プロファイル・ポート・HTTP応答を起動スクリプトで照合し、MCPプロセスのworkspaceと接続先を確認。他の実行中の同プロジェクトチャットがないことを確認した。対象拡張はlist_extensionsのIDで再読み込みした。
+- 対象自身に明示的な業務IDがあり、祖先にも所属先の業務IDがある場合に限りowned-v1キーを作る。アカウント等の外側の所属先も保持し、表示位置を使わない。IDをコピーしただけの祖先、数値のみ・既知のUI生成ID・placeholderは新しい再利用条件に使わない。属性名の対象はREADMEの一覧を参照。
+- 元のpath・query・hashを含めて学習し、新しいpathでの再利用には異なる2ページでの移動先一致を要求する。query/hashは比較から除外しない。所属先の異なる同名・同ID、競合、曖昧・重複・期限切れの記録は新しいpathに再利用しない。同じページの有効な記録は従来どおり使用できる。所属情報のない旧キーにはフォールバックしない。
+- `tests/fixtures/owned-navigation.html`を127.0.0.1だけで待ち受ける一時HTTPサーバーで提供し、新しい検証タブで実行。1ページ目の通常クリック後、2ページ目の中クリックでは再利用せず、確認を拒否するとクリック0回・遷移0回・タブ増加0だった。2ページ目でも通常クリックを観測後、未学習の3ページ目の合成中クリックではmaybeOpenOnMiddleだけが送信され、クリック・元画面遷移は0回、URL・履歴キー・activeを維持し、右隣のバックグラウンドタブが1件増加。学習記録は2件のままで、再学習・権限照会はなかった。
+- 所属先のIDだけを変更した画面、および3件目の通常クリックで異なる移動先を観測した後の未学習ページでは、保存先を直接開かなかった。確認拒否時にクリック・遷移・タブ増加0を確認した。ページと対象service workerのwarn/errorは0件。
+- 自動テスト121件、変更JS構文・差分検査が成功。対象・外側のアカウント・action label・query/hash・origin・期限・重複・同一所属内のID衝突・生成ID等の境界は自動テストで確認した。実サイト全般の適合性、サイトに隠れた状態、物理マウス入力は未検証。最初の2ページでの学習と、サイトがIDを使い回す可能性は残る。検証用originの記録だけを削除し、作成したタブと一時サーバーを終了する。
+
+## ChatGPTの再学習を減らす照合（2026-11-01）
+
+- 専用Chrome 156.0.8078.74 / 9223を起動スクリプトで照合し、MCP 1.12.0のプロセス引数とworkspaceを確認。他の実行中の同プロジェクトチャットがないことを確認して新しい検証タブを開いた。普段使いのブラウザーは操作していない。
+- 保存期間は従来どおり90日、上限500件。専用プロファイルの既存記録は数日前のものが有効だった。通常の新しいチャットはtext-only扱いで閲覧中のpath/queryに依存し、既存のパス横断照合は明示ラベルがあるcontrolに限るため、別ページでは再探索になる条件があった。初回storage読込完了前にも未学習と判定し得た。
+- 日本語／英語のHomeナビゲーションの新しいチャットは共通の操作キー、プロジェクト行とプロジェクト内の新しいチャットは所有するプロジェクトIDと操作の組合せで識別する。並び順・セクション・名前・元ページのパスをキーに含めない。名前からURLは構築しない。main内・メニュー・不正なID・別ホストはこの例外の対象外。
+- 旧v1／section-v1記録を保存し直さずに照合する。プロジェクトの旧ラベルを使う場合は移動先のIDも照合。同名別プロジェクト、競合・曖昧・重複記録、origin、90日期限は維持する。新キーでの競合を旧記録で回避しない。初期読込待ち後はキャッシュを再確認し、元ページ変更・別操作があれば中止する。
+- 実サイトのプロジェクト画面から、文字だけの通常の新しいチャットと、別プロジェクトの新しいチャットを合成中ボタンで検証した。両方ともruntimeメッセージはmaybeOpenOnMiddleのみで、beginSiteNavigationProbeや権限照会は0件。元ページclick・navigateは0件、URL・Navigation API entry key・active状態を維持し、右隣のバックグラウンドタブが1件増えた。保存記録は5件のまま増えず、既存記録の再利用を確認した。
+- 自動テスト110件、変更JS構文と差分検査が成功。並び替え、セクション移動、名前変更、再生成したDOM、読込待ち、競合排除は自動テストで確認した。実プロジェクトの順序・名前は変更していない。物理中クリック・普段使いのプロファイルの症状再現は未検証。個人のプロジェクト名・ID・会話本文はこの記録へ保存しない。
+
+## Google Driveの既定の開き方（2026-10-31）
+
+- 専用Chrome 156.0.8078.74 / 9223を起動スクリプトで照合し、MCPのプロセス引数からworkspaceと9223への接続を確認した。同プロジェクトの他の実行中チャットがないことを確認して操作した。MCPは1.12.0。対象拡張はこのセッションのinstall_extension応答で得たIDを再読み込みした。
+- Driveの通常のOpen（Enter）でその時点の既定アプリを選ばせる。名前・種類・アイコンから編集URLを構築しない。別タブが開けばその実物を配置し、元タブ内の遷移ならNavigation APIの元entryへ戻ってから観測したURLを開く。元entryへ戻れない場合は元URLの再読み込みへフォールバックする。復帰確認前に新タブを作らない。
+- Ctrl+Enterは常にダブルクリックと同じではない。実DriveのMarkdownで、通常ダブルクリック／EnterはDocs編集画面、Ctrl+EnterはDriveプレビューになる差を確認した。このためCtrl+Enterを使うのは通常Openが画面内プレビューを表示したと確認できた場合だけ。Driveの親画面のビューア終了ボタンで閉じ、非表示を確認してから別タブへ開き直す。プレビューの読み込みと終了には待機が必要。
+- リストのMarkdownは同じID・見出しhashのDocsタブ、XMLは同じIDのDriveプレビュー、グリッドのColabファイルはColabタブを開いた。いずれも増加は1タブ、右隣、最終active=false、元タブactive=trueを確認。ファイルの編集やノートブックの実行はしていない。
+- フォルダは通常Openで一時的に元タブが移動した後、元URLと元entry keyへ戻り、観測した同じフォルダが右隣のバックグラウンドタブへ1件増えることを確認した。ファイルでも元URL・entry keyの維持と元画面のプレビュー終了を確認した。
+- 合成中クリック用スクリプトはDriveの同じIDの名前要素へ送信する。行全体から最初のSVGを選ぶとファイル種類によってオーナー等の操作ボタンを指すため、その方法は使わない。
+- 自動テスト100件、変更JSの構文検査、差分検査が成功。対象service workerのwarn/errorは0件。ページConsoleにはPermissions-Policy警告とERR_BLOCKED_BY_CLIENTがあり、出所が明示されないものは未特定。
+- 元画面の選択は対象1件に変わり、遷移・プレビュー・アプリタブが一瞬表示される場合がある。DOM変更・ポップアップ制限・遅いアプリ・別ウィンドウ・ダウンロード・OSアプリでは保証できない。物理中クリック、複数アカウント、PDF、Office形式、ショートカット項目、全カスタムアプリは未検証。私的なファイル名・ID・本文はこの記録へ保存しない。
+
 ## Google Driveの未学習項目（2026-10-28）
 
 - 専用Chrome 155.0.8059.85 / 9223のマイドライブで、リストの`role="row"`とグリッドの`role="gridcell"`に`data-target="doc"`、`data-selectable`、`data-id`があることを確認した。通常のダブルクリックで同じIDのフォルダへ移動し、Driveの`/open?id=...&authuser=0`でも同じフォルダへ解決されることを確認した。
@@ -135,6 +164,7 @@ node --check background.js
 node --check content.js
 node --check navigation-learning.js
 node --check navigation-probe.js
+node --check drive-opening.js
 node --check feedback.js
 node --check scripts/synthetic-middle-click.js
 node --test tests/*.test.cjs
