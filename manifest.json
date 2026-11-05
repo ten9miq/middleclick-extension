@@ -1,6 +1,6 @@
 {
   "name": "MiddleClick+",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "manifest_version": 3,
   "description": "Middle click option for clickables. Opens detected destinations in a background tab next to the source tab, with ChatGPT sidebar support.",
   "permissions": [
@@ -25,11 +25,19 @@
       "js": [
         "navigation-learning.js",
         "feedback.js",
+        "event-analysis-client.js",
         "content.js"
       ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "ISOLATED"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["vendor/acorn/acorn.js", "event-analysis.js", "event-analysis-main.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
     }
   ]
 }

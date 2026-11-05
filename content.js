@@ -425,7 +425,14 @@
     const region = control.parentElement?.closest('nav, aside, [role="navigation"]');
     if (!region) return null;
     const label = normalizeText(control.getAttribute('aria-label') || control.getAttribute('title') || control.textContent);
-    const project = control.closest('[data-app-action-sidebar-project-id], [data-sidebar-project-container-id]');
+    const ownerSelector = '[data-app-action-sidebar-project-id], [data-sidebar-project-container-id]';
+    let project = control.closest(ownerSelector);
+    // The Recents/Pinned wrappers use this same container attribute with
+    // values such as "chats". Only project:... denotes a project owner.
+    for (let depth = 0; project && depth < 32 && !project.hasAttribute('data-app-action-sidebar-project-id') &&
+      !/^project:/.test(project.getAttribute('data-sidebar-project-container-id') || ''); depth++) {
+      project = project.parentElement?.closest(ownerSelector) || null;
+    }
     const projectId = project?.getAttribute('data-app-action-sidebar-project-id') ||
       project?.getAttribute('data-sidebar-project-container-id')?.replace(/^project:/, '') || '';
     if (project && !/^g-p-[0-9a-f]{32}$/i.test(projectId)) return null;
@@ -592,6 +599,17 @@
       if (cached) {
         activeProbe = false;
         sendMessage({ type: 'maybeOpenOnMiddle', url: cached, requestId: Date.now() + ':' + (++requestSequence) });
+        return;
+      }
+      // MAIN-world inspection is read-only. Unknown syntax/state returns to the
+      // existing permission/learning path without executing an event handler.
+      let analyzed = null;
+      try { analyzed = await globalThis.MiddleClickEventClient?.resolve(control, sourceUrl); }
+      catch { /* A broken/unavailable analyzer must retain normal learning. */ }
+      if (!stillCurrent()) { if (probeAttempt === attempt) activeProbe = false; return; }
+      if (analyzed) {
+        activeProbe = false;
+        sendMessage({ type: 'maybeOpenOnMiddle', url: analyzed, requestId: Date.now() + ':' + (++requestSequence) });
         return;
       }
       const permission = await chrome.runtime.sendMessage({ type: 'getSiteLearningPermission', origin });

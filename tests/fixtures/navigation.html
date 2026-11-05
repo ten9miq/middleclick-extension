@@ -5,6 +5,7 @@
 <style>body { font: 18px sans-serif; padding: 32px; } nav { display: flex; gap: 12px; } button, a { padding: 14px; }</style>
 <h1>Generic navigation fixture</h1>
 <nav aria-label="Fixture navigation">
+  <button type="button" data-item-id="event">Analyzable event destination</button>
   <button type="button" data-item-id="spa">SPA destination</button>
   <button type="button" data-item-id="document">Document destination</button>
   <button type="button" data-item-id="unknown">Unresolved button</button>
@@ -12,6 +13,9 @@
 </nav>
 <p id="status"></p>
 <script>
+  window.fixtureClicks = 0;
+  document.addEventListener('click', event => { if (event.target.closest('button')) window.fixtureClicks++; }, true);
+  document.querySelector('[data-item-id="event"]').onclick = () => location.assign('/event-destination');
   window.fixtureRoute = '/spa';
   document.querySelector('[data-item-id="spa"]').addEventListener('click', () => {
     history.pushState(null, '', window.fixtureRoute);

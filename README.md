@@ -29,7 +29,15 @@ The clicked item becomes the sole selection. A folder transition, preview or for
 
 Real-site checks cover folders, Markdown opening in Docs, XML opening as a Drive preview, and Colab opening in its default app, including list and grid items, using synthetic middle-button events. Physical mouse input, multiple accounts, PDFs, Office formats, shortcut items and every possible custom app have not been verified. Downloads, OS applications and apps opening a separate window cannot be guaranteed to become browser tabs. Drive DOM changes and popup restrictions can prevent the replay from working.
 
-## Generic navigation learning
+## Event handler destination analysis
+
+For an unresolved control without an existing learned destination, the extension first tries read-only event analysis. A bundled Acorn parser follows supported handler expressions, React props/compiler dependency caches, and Webpack/Rspack module definitions. It can resolve simple same-origin navigation URLs and pure string builders without calling the site's handler or constructing a ChatGPT route from an ID. Variable names, module IDs and compiler slot positions are read from syntax rather than fixed in the extension.
+
+The page's MAIN world supplies handler metadata to the isolated content script through a request bound to the clicked control and source URL. Only an HTTP(S), same-origin, non-authentication destination can take this path. Source changes, removed controls, unsupported syntax, unknown branches, required navigation state, ambiguous modules, timeouts and analysis failures retain the normal permission/learning path. Already detected links and learned destinations keep their existing fast path.
+
+The analyzer reads JavaScript assets already declared by the page on its own origin, using the browser cache. It does not intercept page APIs or network responses, execute downloaded source, replay the control in another tab, or persist analyzed destinations. Source reads and interpretation have size, count and time limits. React internals and bundler layouts can change; not every event listener, closure, framework or route can be analyzed. See [implementation and verification](docs/EVENT_ANALYSIS.md).
+
+## Generic navigation learning (fallback)
 
 The extension passively learns identifiable controls from normal left clicks. When an unlearned control is middle-clicked on an unapproved site, it asks once for permission to discover destinations on that site. After the grant is saved, it can execute the left-click action of other eligible unlearned controls there without additional confirmation. It observes the destination, restores the original page, and opens the destination in an adjacent background tab. Learned controls use the stored URL directly. Cancelling the site prompt does not grant permission, click, navigate, or create a tab.
 

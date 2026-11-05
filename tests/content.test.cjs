@@ -58,7 +58,7 @@ class Element {
 
 function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = false,
   confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }), siteAllowed = false,
-  savePermission = async () => ({ ok: true }), driveAcknowledge = async () => ({ ok: true }), loadEntries = null } = {}) {
+  savePermission = async () => ({ ok: true }), driveAcknowledge = async () => ({ ok: true }), loadEntries = null, eventResolver = null } = {}) {
   const listeners = new Map();
   const messages = [];
   const location = new URL(`https://${host}/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`);
@@ -91,6 +91,7 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
       entries() { return this.fields[Symbol.iterator](); }
     },
     document, MiddleClickLearning: learning,
+    MiddleClickEventClient: eventResolver ? { resolve: eventResolver } : undefined,
     window, top: topFrame ? window : {},
     MiddleClickFeedback: { show(reason) { notices.push(reason); } },
     chrome: { runtime: { id: 'extension', onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
@@ -126,6 +127,59 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
     receive(message, respond = () => {}) { runtimeListeners.forEach(fn => fn(message, { id: 'extension' }, respond)); },
     change(entries) { changed({ [learning.STORAGE_KEY]: { newValue: { version: 1, entries } } }, 'local'); } };
 }
+
+test('event analysis opens unknown controls without permission, learning or a target click', async () => {
+  const item = iconButton({ 'aria-label': 'Open workspace' });
+  const h = harness('example.com', { topFrame: true, root: rootOf(item.button), eventResolver: async () => 'https://example.com/workspace' });
+  item.button.click = () => { throw new Error('Must not click'); };
+  h.dispatch(item.icon);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+  assert.equal(h.messages[0].url, 'https://example.com/workspace');
+});
+
+test('unsupported event analysis falls back to the existing site permission path', async () => {
+  const item = iconButton({ 'aria-label': 'Unknown' });
+  const h = harness('example.com', { topFrame: true, root: rootOf(item.button), eventResolver: async () => null });
+  h.dispatch(item.icon);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['getSiteLearningPermission']);
+});
+
+test('a source change while analyzing cancels both tab opening and learning', async () => {
+  let complete;
+  const item = iconButton({ 'aria-label': 'Unknown' });
+  const h = harness('example.com', { topFrame: true, root: rootOf(item.button), eventResolver: () => new Promise(resolve => { complete = resolve; }) });
+  h.dispatch(item.icon);
+  await flush();
+  h.location.pathname = '/elsewhere';
+  complete('https://example.com/workspace');
+  await flush();
+  assert.equal(h.messages.length, 0);
+});
+
+test('an event analyzer failure retains the existing permission and learning behavior', async () => {
+  const item = iconButton({ 'aria-label': 'Unknown' });
+  const h = harness('example.com', { topFrame: true, root: rootOf(item.button), eventResolver: async () => { throw new Error('Unavailable bridge'); } });
+  h.dispatch(item.icon);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['getSiteLearningPermission']);
+});
+
+test('the real Recents container is not mistaken for a project owner during New chat lookup', async () => {
+  const button = new Element('button', { 'aria-label': '新しいチャット' });
+  const chats = new Element('div', { 'data-sidebar-project-container-id': 'chats' }, [button]);
+  const nav = new Element('nav', { 'aria-label': 'ホーム' }, [chats]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  const origin = 'https://chatgpt.com';
+  const key = JSON.stringify(['chatgpt-nav-v1', 'new-chat', '']);
+  const h = harness('chatgpt.com', { topFrame: true, root, entries: learning.remember([], origin, key, origin + '/') });
+  await flush();
+  h.dispatch(button);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+  assert.equal(h.messages[0].url, origin + '/');
+});
 
 function iconButton(attrs = {}) {
   const icon = new Element('use', { href: sprite }, [], SVG);

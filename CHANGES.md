@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+- Analyze supported event handlers as data before discovering an unknown destination. Add a bundled Acorn parser, a read-only MAIN-world bridge, React/compiler binding extraction and bounded Webpack/Rspack module resolution. Open resolvable same-origin URLs directly; retain existing learned destinations and the site-consent learning fallback for unsupported handlers and navigation state.
+- Distinguish the Recents/Pinned container IDs from real project owners so ChatGPT's normal New chat controls share their existing learned action destination.
+- Preserve native links, Drive opening, Codex mode handling, tab adjacency and group inheritance. No new permissions.
+- Verify 143 automated tests and dedicated-Chrome checks for unlearned project New chat actions, both ordinary New chat controls, and the permission/learning fallback. Preserve source-page state and existing stored mappings. Synthetic middle-button events were used; physical mouse input remains unverified.
+
 ## 1.4.0
 
 - Add conservative generic cross-page reuse for controls with their own business IDs and a full owner-ID chain. Require two agreeing source paths, retain query/hash context, and reject mismatched owners/items, generated IDs, ambiguity, duplicates and conflicting destinations. Preserve exact-page lookup and keep owner-free legacy records out of the new evidence pool.
