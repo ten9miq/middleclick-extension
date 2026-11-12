@@ -7,9 +7,13 @@ async function syntheticMiddleClick(element) {
     element.getAttribute('data-target') === 'doc' && element.hasAttribute('data-selectable');
   const driveCurrentFolder = location.origin === 'https://drive.google.com' &&
     element?.getAttribute('role') === 'button' &&
+    element.getAttribute('data-target') !== 'collapsedFolderButton' &&
     element.parentElement?.getAttribute('guidedhelpid') === 'folder_path_button' &&
     element.closest('nav[guidedhelpid="folder_path"]');
-  if (!element?.isConnected || (!driveItem && !element.matches('a, area, button, [role="link"], [role="button"]'))) {
+  const driveBreadcrumbMenuItem = location.origin === 'https://drive.google.com' &&
+    element?.getAttribute('role') === 'menuitem' && element.getAttribute('data-target') === 'folder' &&
+    element.closest('[data-target="collapsedFolderDropdown"]')?.getAttribute('role') === 'menu';
+  if (!element?.isConnected || (!driveItem && !driveBreadcrumbMenuItem && !element.matches('a, area, button, [role="link"], [role="button"]'))) {
     throw new Error('Select a visible navigation control from a fresh snapshot.');
   }
   if (element.closest('form') || element.form || (element.hasAttribute('aria-haspopup') && !driveCurrentFolder)) {

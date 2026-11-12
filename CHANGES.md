@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.2
+
+- Support middle-clicking ancestor folders inside Google Drive's collapsed folder-path menu. Recognize its menu items outside the breadcrumb navigation and preserve resource keys stored on their same-ID name descendants.
+- Keep the ellipsis menu button separate from the current-folder destination and reject unrelated menus, nested actions and conflicting resource keys.
+- Verify 158 automated tests and dedicated-Chrome synthetic middle-button opening from the collapsed ancestor list, including resource-key preservation, source history and adjacent background-tab placement.
+
 ## 1.5.1
 
 - Open Google Drive folder-path breadcrumbs directly in an adjacent background tab. Preserve account context and each folder's resource key; middle-clicking the current folder opens its current URL without invoking its menu.

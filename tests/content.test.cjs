@@ -751,6 +751,84 @@ function driveBreadcrumb(current = false, options = {}) {
   return { ...h, control, icon, item, nav };
 }
 
+function driveCollapsedBreadcrumb(options = {}) {
+  const icon = new Element('svg', {}, [], SVG);
+  const label = new Element('div', { 'data-id': 'ancestor_1234567890', 'data-rk': '0-folder-key' }, [icon]);
+  const control = new Element('div', { role: 'menuitem', 'data-target': 'folder', 'data-id': 'ancestor_1234567890' }, [label]);
+  // Drive mounts this menu outside the folder-path navigation and gives its
+  // items no tabindex. The resource key lives on a same-ID descendant.
+  const menu = new Element('div', { role: 'menu', 'data-target': 'collapsedFolderDropdown' }, [control]);
+  const root = new Element('html', {}, [new Element('body', {}, [menu])]);
+  const h = harness('drive.google.com', { root, topFrame: true, ...options });
+  h.location.pathname = '/drive/u/2/folders/current_1234567890';
+  h.location.search = '?resourcekey=0-current-key&authuser=person%40example.com';
+  return { ...h, control, icon, label, menu };
+}
+
+test('Drive collapsed breadcrumb menu items open one tab with their own ID and nested resource key', async () => {
+  for (const kind of ['nested', 'control', 'no-key']) {
+    const h = driveCollapsedBreadcrumb();
+    if (kind !== 'nested') delete h.label.attrs['data-rk'];
+    if (kind === 'control') h.control.attrs['data-rk'] = '0-folder-key';
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) {
+      assert.equal(h.dispatch(h.icon, type).defaultPrevented, true);
+    }
+    await flush();
+    assert.deepEqual(h.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+    const url = new URL(h.messages[0].url);
+    assert.equal(url.pathname, '/drive/u/2/folders/ancestor_1234567890');
+    assert.equal(url.searchParams.get('authuser'), 'person@example.com');
+    assert.equal(url.searchParams.get('resourcekey'), kind === 'no-key' ? null : '0-folder-key');
+    assert.equal(h.location.pathname, '/drive/u/2/folders/current_1234567890');
+    assert.equal(h.control.events, undefined);
+  }
+});
+
+test('Drive collapsed breadcrumbs do not borrow resource keys from other IDs or nested buttons', async () => {
+  for (const kind of ['other-id', 'nested-button']) {
+    const h = driveCollapsedBreadcrumb();
+    if (kind === 'other-id') h.label.attrs['data-id'] = 'different_1234567890';
+    else h.label.attrs.role = 'button';
+    h.dispatch(h.control); await flush();
+    assert.equal(new URL(h.messages[0].url).searchParams.has('resourcekey'), false, kind);
+  }
+});
+
+test('Drive collapsed breadcrumb detection excludes unrelated menus, malformed IDs and nested actions', async () => {
+  for (const kind of ['host', 'http', 'path', 'frame', 'menu', 'menu-role', 'target', 'id', 'disabled', 'editable', 'nested', 'conflict']) {
+    const h = driveCollapsedBreadcrumb({ topFrame: kind !== 'frame' });
+    if (kind === 'host') h.location.hostname = 'drive.google.com.example.com';
+    if (kind === 'http') h.location.protocol = 'http:';
+    if (kind === 'path') h.location.pathname = '/file/d/another_1234567890/view';
+    if (kind === 'menu') h.menu.attrs['data-target'] = 'otherMenu';
+    if (kind === 'menu-role') h.menu.attrs.role = 'dialog';
+    if (kind === 'target') h.control.attrs['data-target'] = 'action';
+    if (kind === 'id') h.control.attrs['data-id'] = '../bad?';
+    if (kind === 'disabled') h.control.attrs['aria-disabled'] = 'true';
+    if (kind === 'editable') h.label.attrs.contenteditable = 'true';
+    if (kind === 'nested') h.label.attrs.role = 'button';
+    if (kind === 'conflict') h.control.attrs['data-rk'] = '0-conflicting-key';
+    h.dispatch(h.icon); await flush();
+    assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false, kind);
+    assert.equal(h.control.events, undefined, kind);
+  }
+});
+
+test('Drive collapsed breadcrumb ordinary left clicks and modified middle clicks keep their behavior', async () => {
+  const h = driveCollapsedBreadcrumb();
+  assert.equal(h.dispatch(h.icon, 'click', { button: 0, isTrusted: true }).defaultPrevented, undefined);
+  assert.equal(h.dispatch(h.icon, 'mousedown', { ctrlKey: true }).defaultPrevented, undefined);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['cancelNavigationLearning']);
+});
+
+test('Drive ellipsis buttons never masquerade as the current folder destination', async () => {
+  const h = driveBreadcrumb(true);
+  h.control.attrs['data-target'] = 'collapsedFolderButton';
+  h.dispatch(h.icon); await flush();
+  assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false);
+});
+
 test('Drive breadcrumbs open one adjacent-tab request without clicking, learning or losing account/resource keys', async () => {
   for (const pathname of ['/drive/u/2/folders/current_1234567890', '/drive/folders/current_1234567890']) {
     const h = driveBreadcrumb();

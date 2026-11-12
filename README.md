@@ -19,7 +19,7 @@ SVG drawing references (such as `<use href="...svg#icon">`), resource metadata a
 
 ## Google Drive items
 
-Folder-path breadcrumbs also support middle-click, including My Drive, ancestor folders and the current folder menu button. These open directly in an adjacent background tab without changing the source page or invoking the menu. Account context and folder resource keys are preserved; no learning permission is needed.
+Folder-path breadcrumbs also support middle-click, including My Drive, ancestor folders and the current folder menu button. When a deep path is collapsed into an ellipsis, left-click the ellipsis to display its ancestor list, then middle-click the desired folder. These open directly in an adjacent background tab without changing the source page or invoking the folder's action menu. Account context and folder resource keys are preserved; no learning permission is needed.
 
 On `https://drive.google.com/drive/...`, middle-clicking a selectable list row or grid item selects that item and invokes Drive's normal **Open** action (Enter), letting Drive choose its current default app. The extension does not construct editor URLs from filenames, icons or file types, and does not cache a default-app decision. No site-wide automatic-learning grant is needed for this Drive-specific open action.
 

@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。Driveの既定動作対応ではbackgroundから読み込む `drive-opening.js` も必要。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.5.1。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`drive-opening.js`、`feedback.js`、`content.js`、`event-analysis-client.js`、MAIN worldの`event-analysis-main.js`・`event-analysis.js`・`vendor/acorn/acorn.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。イベント解析の仕様と検証結果は [EVENT_ANALYSIS.md](EVENT_ANALYSIS.md) を参照する。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.5.2。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`drive-opening.js`、`feedback.js`、`content.js`、`event-analysis-client.js`、MAIN worldの`event-analysis-main.js`・`event-analysis.js`・`vendor/acorn/acorn.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。イベント解析の仕様と検証結果は [EVENT_ANALYSIS.md](EVENT_ANALYSIS.md) を参照する。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -134,6 +134,13 @@ Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` �
 - 旧v1／section-v1記録を保存し直さずに照合する。プロジェクトの旧ラベルを使う場合は移動先のIDも照合。同名別プロジェクト、競合・曖昧・重複記録、origin、90日期限は維持する。新キーでの競合を旧記録で回避しない。初期読込待ち後はキャッシュを再確認し、元ページ変更・別操作があれば中止する。
 - 実サイトのプロジェクト画面から、文字だけの通常の新しいチャットと、別プロジェクトの新しいチャットを合成中ボタンで検証した。両方ともruntimeメッセージはmaybeOpenOnMiddleのみで、beginSiteNavigationProbeや権限照会は0件。元ページclick・navigateは0件、URL・Navigation API entry key・active状態を維持し、右隣のバックグラウンドタブが1件増えた。保存記録は5件のまま増えず、既存記録の再利用を確認した。
 - 自動テスト110件、変更JS構文と差分検査が成功。並び替え、セクション移動、名前変更、再生成したDOM、読込待ち、競合排除は自動テストで確認した。実プロジェクトの順序・名前は変更していない。物理中クリック・普段使いのプロファイルの症状再現は未検証。個人のプロジェクト名・ID・会話本文はこの記録へ保存しない。
+
+## Google Driveの省略パンくずメニュー（2026-11-12）
+
+- 深い階層の「…」を左クリックした一覧内のフォルダが対象。実DOMでは`data-target="collapsedFolderDropdown"`の`role="menu"`内に、tabindexを持たない`role="menuitem"`、`data-target="folder"`、`data-id`がある。メニューはパンくずのnav外へ配置され、resource keyは同じIDの子要素の`data-rk`にある。
+- このメニュー内のフォルダだけをクリック対象として認識し、対応IDのresource keyを引き継ぐ。別IDや入れ子ボタンのキーを借用せず、競合するキーも採用しない。「…」本体の`collapsedFolderButton`は現在フォルダへのリンクから除外する。
+- 同じ専用Chrome／9223で、前回許可されたポート所有者照合省略を継続し、プロセス・HTTP応答・MCPの接続先と他の同時操作者がいないことを確認した。読み込み元を確認済みの拡張を再読み込みして新規検証タブで検証。1242×1053で省略メニュー内のresource key付きフォルダへ合成中ボタンイベントを送り、右隣に背景タブが1件だけ増え、元URL・entry key・元タブactive・未所属グループを維持した。元画面のclick／navigateは0件で、通常左クリックでも同じresource key付きURLへ移動した。
+- 自動テスト158件、変更JSの構文検査、git diff --checkが成功。対象service workerのwarn/errorは0件。物理中クリック・Enterprise環境の同メニューは未確認。私的な名前・ID・URLは保存せず、検証タブは閉じた。
 
 ## Google Driveの即時失敗への対策（2026-11-12）
 

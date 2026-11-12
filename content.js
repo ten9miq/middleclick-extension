@@ -259,7 +259,15 @@
 
 
   function clickControl(e) {
-    return getEventElements(e).find(el => el.matches?.(CLICKABLE_SELECTOR)) || null;
+    return getEventElements(e).find(el => el.matches?.(CLICKABLE_SELECTOR) || driveBreadcrumbMenuItem(el)) || null;
+  }
+
+  function driveBreadcrumbMenuItem(control) {
+    return location.origin === 'https://drive.google.com' && /^\/drive(?:\/|$)/.test(location.pathname) &&
+      control?.getAttribute('role') === 'menuitem' &&
+      control.getAttribute('data-target') === 'folder' &&
+      /^[A-Za-z0-9_-]{10,200}$/.test(control.getAttribute('data-id') || '') &&
+      control.closest('[data-target="collapsedFolderDropdown"]')?.getAttribute('role') === 'menu';
   }
 
   function blockedControl(control, target) {
@@ -301,17 +309,19 @@
   function driveBreadcrumbDestination(control, target) {
     if (window !== top || location.origin !== 'https://drive.google.com' ||
       !/^\/drive(?:\/|$)/.test(location.pathname) || !control ||
-      !control.closest('nav[guidedhelpid="folder_path"]') ||
       control.closest('form') || control.form) return null;
+    const menuItem = driveBreadcrumbMenuItem(control);
+    if (!menuItem && !control.closest('nav[guidedhelpid="folder_path"]')) return null;
     // The current folder is a menu button, but its middle-click destination
     // is the current URL. Do not invoke that menu or borrow an ancestor ID.
     if (control.getAttribute('role') === 'button' &&
+      control.getAttribute('data-target') !== 'collapsedFolderButton' &&
       control.parentElement?.getAttribute('guidedhelpid') === 'folder_path_button') {
       if (control.hasAttribute('disabled') || control.getAttribute('aria-disabled') === 'true' ||
         target?.closest('input, textarea, select, [contenteditable="true"]')) return null;
       return location.href;
     }
-    if (blockedControl(control, target) || control.getAttribute('role') !== 'link' ||
+    if (blockedControl(control, target) || (!menuItem && control.getAttribute('role') !== 'link') ||
       control.getAttribute('data-target') !== 'folder') return null;
     const id = control.getAttribute('data-id') || '';
     if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return null;
@@ -319,7 +329,14 @@
     const url = new URL(`${accountPath}/folders/${id}`, location.origin);
     const account = new URLSearchParams(location.search).get('authuser');
     if (account) url.searchParams.set('authuser', account);
-    const resourceKey = control.getAttribute('data-rk');
+    // Collapsed breadcrumbs place the resource key on the same-ID name
+    // descendant, while visible links put it on the control itself.
+    const resourceKeys = new Set([control, ...control.querySelectorAll('[data-id]')].filter(el =>
+      el.getAttribute('data-id') === id &&
+      el.closest(CLICKABLE_SELECTOR + ', [role="menuitem"]') === control)
+      .map(el => el.getAttribute('data-rk')).filter(Boolean));
+    if (resourceKeys.size > 1) return null;
+    const resourceKey = [...resourceKeys][0];
     if (resourceKey) url.searchParams.set('resourcekey', resourceKey);
     return url.href;
   }
