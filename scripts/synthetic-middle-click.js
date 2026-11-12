@@ -5,10 +5,14 @@ async function syntheticMiddleClick(element) {
   const driveItem = location.origin === 'https://drive.google.com' &&
     element?.matches('[role="row"], [role="gridcell"]') &&
     element.getAttribute('data-target') === 'doc' && element.hasAttribute('data-selectable');
+  const driveCurrentFolder = location.origin === 'https://drive.google.com' &&
+    element?.getAttribute('role') === 'button' &&
+    element.parentElement?.getAttribute('guidedhelpid') === 'folder_path_button' &&
+    element.closest('nav[guidedhelpid="folder_path"]');
   if (!element?.isConnected || (!driveItem && !element.matches('a, area, button, [role="link"], [role="button"]'))) {
     throw new Error('Select a visible navigation control from a fresh snapshot.');
   }
-  if (element.closest('form') || element.form || element.hasAttribute('aria-haspopup')) {
+  if (element.closest('form') || element.form || (element.hasAttribute('aria-haspopup') && !driveCurrentFolder)) {
     throw new Error('Do not select forms or action menus.');
   }
   const rect = element.getBoundingClientRect();

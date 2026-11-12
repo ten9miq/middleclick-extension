@@ -67,6 +67,17 @@ test('Drive rejects forged sources, frames, malformed IDs and concurrent registr
   const h = harness(); assert.equal(h.request().ok, true); assert.equal(h.request().ok, false);
 });
 
+test('Drive preparation distinguishes stale sender URLs from a pending operation', () => {
+  const h = harness();
+  const stale = h.request({ ...request, sourceUrl: url + '?changed' });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, 'drive-registration-stale-source');
+  assert.equal(h.request().ok, true);
+  const busy = h.request();
+  assert.equal(busy.ok, false);
+  assert.equal(busy.reason, 'drive-registration-busy');
+});
+
 test('Drive cancellation and tab closure disarm adoption; stale cancellations do not cancel new requests', async () => {
   for (const kind of ['cancel', 'close']) {
     const h = harness(); h.request();
@@ -81,7 +92,7 @@ test('Drive cancellation and tab closure disarm adoption; stale cancellations do
 
 test('Drive timeout and adoption failure report failure without creating a fallback tab', async () => {
   const expired = harness(); expired.request(); expired.expire(); expired.created(); await flush();
-  assert.equal(expired.adopted.length, 0); assert.equal(expired.feedback[0].reason, 'drive-open-failed');
+  assert.equal(expired.adopted.length, 0); assert.equal(expired.feedback[0].reason, 'drive-open-timeout');
   const failed = harness({ fail: true }); failed.request(); failed.created(); await flush();
   assert.equal(failed.adopted.length, 1); assert.equal(failed.feedback[0].reason, 'drive-open-failed');
 });

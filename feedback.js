@@ -4,6 +4,15 @@
   let timer;
   const messages = {
     'drive-open-failed': 'Driveの既定の開き方で別タブを開けませんでした。タブの状態を確認し、通常のダブルクリックを使ってください。',
+    'drive-preview-active': 'Driveのプレビューが開いているため、中クリックを実行できません。プレビューを閉じてから再試行してください。',
+    'drive-connection-failed': 'Driveを開く準備中に拡張機能との通信が失敗しました。拡張機能とDriveのページを再読み込みしてください。',
+    'drive-registration-failed': '拡張機能がDriveを開く準備を受け付けませんでした。拡張機能とDriveのページを再読み込みしてください。',
+    'drive-registration-busy': '前のDrive操作がまだ処理中です。しばらく待ってから再試行してください。',
+    'drive-registration-stale-source': 'Driveの現在のURLと拡張機能が認識するURLが一致しません。Driveのページを再読み込みしてください。',
+    'drive-source-changed': '準備中にDriveの画面または対象項目が更新されたため、中クリックを中止しました。もう一度操作してください。',
+    'drive-selection-failed': 'Driveの対象項目だけが選択されたことを確認できませんでした。通常のクリックで選択できるか確認してください。',
+    'drive-action-failed': 'Driveの選択・開く操作の再現中にエラーが発生しました。通常のダブルクリックを使ってください。',
+    'drive-open-timeout': 'Driveに開く操作を送りましたが、10秒以内に移動先を確認できませんでした。通常のダブルクリックを使ってください。',
     checking: "移動先を確認しています。移動後に元のページへ戻ります。",
     opened: "元のページへ戻り、移動先を別タブで開きました。",
     unavailable: "この対象は自動学習できません。通常の左クリックを使ってください。",

@@ -58,7 +58,8 @@ class Element {
 
 function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = false,
   confirm = () => false, acknowledge = () => Promise.resolve({ ok: true }), siteAllowed = false,
-  savePermission = async () => ({ ok: true }), driveAcknowledge = async () => ({ ok: true }), loadEntries = null, eventResolver = null } = {}) {
+  savePermission = async () => ({ ok: true }), driveAcknowledge = async () => ({ ok: true }), loadEntries = null, eventResolver = null,
+  scheduleTimeout = callback => queueMicrotask(callback) } = {}) {
   const listeners = new Map();
   const messages = [];
   const location = new URL(`https://${host}/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`);
@@ -81,7 +82,7 @@ function harness(host = 'chatgpt.com', { entries = [], root = null, topFrame = f
   };
   const saved = { [learning.STORAGE_KEY]: { version: 1, entries } };
   vm.runInNewContext(source, {
-    setTimeout: callback => { queueMicrotask(callback); },
+    setTimeout: scheduleTimeout,
     MouseEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     PointerEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     KeyboardEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
@@ -736,6 +737,83 @@ function driveHarness(role = 'row', options = {}) {
   return { ...h, ...item, root };
 }
 
+function driveBreadcrumb(current = false, options = {}) {
+  const icon = new Element('svg', {}, [], SVG);
+  const control = new Element('div', current ? { role: 'button', 'aria-haspopup': 'true', tabindex: '-1' } :
+    { role: 'link', 'data-target': 'folder', 'data-id': 'ancestor_1234567890', 'data-rk': '0-folder-key', tabindex: '-1' }, [icon]);
+  const item = new Element('div', current ? { role: 'listitem', guidedhelpid: 'folder_path_button' } :
+    { role: 'listitem', 'data-menu-anchor': 'ancestor_1234567890' }, [control]);
+  const nav = new Element('nav', { role: 'navigation', guidedhelpid: 'folder_path' }, [item]);
+  const root = new Element('html', {}, [new Element('body', {}, [nav])]);
+  const h = harness('drive.google.com', { root, topFrame: true, ...options });
+  h.location.pathname = '/drive/u/2/folders/current_1234567890';
+  h.location.search = '?resourcekey=0-current-key';
+  return { ...h, control, icon, item, nav };
+}
+
+test('Drive breadcrumbs open one adjacent-tab request without clicking, learning or losing account/resource keys', async () => {
+  for (const pathname of ['/drive/u/2/folders/current_1234567890', '/drive/folders/current_1234567890']) {
+    const h = driveBreadcrumb();
+    h.location.pathname = pathname;
+    h.location.search += '&authuser=person%40example.com';
+    const original = h.location.href;
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) {
+      assert.equal(h.dispatch(h.icon, type).defaultPrevented, true);
+    }
+    await flush();
+    assert.deepEqual(h.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+    const url = new URL(h.messages[0].url);
+    assert.equal(url.pathname, pathname.replace('current_1234567890', 'ancestor_1234567890'));
+    assert.equal(url.searchParams.get('authuser'), 'person@example.com');
+    assert.equal(url.searchParams.get('resourcekey'), '0-folder-key');
+    assert.equal(h.location.href, original);
+    assert.equal(h.control.events, undefined);
+  }
+});
+
+test('Drive current-folder breadcrumb opens the current URL without invoking its action menu', async () => {
+  const h = driveBreadcrumb(true);
+  for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) h.dispatch(h.icon, type);
+  await flush();
+  assert.deepEqual(h.messages.map(m => m.type), ['maybeOpenOnMiddle']);
+  assert.equal(h.messages[0].url, h.location.href);
+  assert.equal(h.control.events, undefined);
+});
+
+test('Drive breadcrumbs retain ordinary left clicks and modified middle clicks', async () => {
+  for (const current of [false, true]) {
+    const h = driveBreadcrumb(current);
+    assert.equal(h.dispatch(h.icon, 'click', { button: 0, isTrusted: true }).defaultPrevented, undefined);
+    assert.equal(h.dispatch(h.icon, 'mousedown', { ctrlKey: true }).defaultPrevented, undefined);
+    await flush();
+    assert.deepEqual(h.messages.map(m => m.type), ['cancelNavigationLearning']);
+  }
+});
+
+test('Drive breadcrumb IDs are limited to real folder-path controls and never borrowed by nested actions', async () => {
+  for (const kind of ['host', 'http', 'path', 'frame', 'nav', 'target', 'id', 'form', 'disabled', 'editable', 'nested', 'menu']) {
+    const h = driveBreadcrumb(kind === 'menu', { topFrame: kind !== 'frame' });
+    if (kind === 'host') h.location.hostname = 'drive.google.com.example.com';
+    if (kind === 'http') h.location.protocol = 'http:';
+    if (kind === 'path') h.location.pathname = '/file/d/file_1234567890/view';
+    if (kind === 'nav') delete h.nav.attrs.guidedhelpid;
+    if (kind === 'target') h.control.attrs['data-target'] = 'doc';
+    if (kind === 'id') h.control.attrs['data-id'] = '../bad?';
+    if (kind === 'form') new Element('form', {}, [h.control]);
+    if (kind === 'disabled') h.control.attrs['aria-disabled'] = 'true';
+    if (kind === 'editable') h.icon.attrs.contenteditable = 'true';
+    if (kind === 'menu') delete h.item.attrs.guidedhelpid;
+    let target = h.icon;
+    if (kind === 'nested') {
+      target = new Element('button', { 'aria-haspopup': 'menu' });
+      h.control.children.push(target); target.parentElement = h.control;
+    }
+    h.dispatch(target); await flush();
+    assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false, kind);
+    assert.equal(h.messages.some(m => m.type === 'beginDriveDefaultOpen'), false, kind);
+  }
+});
+
 test('Drive list/grid delegate one complete middle gesture to the default-open shortcut', async () => {
   for (const role of ['row', 'gridcell']) {
     const h = driveHarness(role);
@@ -813,19 +891,108 @@ test('Drive denied acknowledgements, stale source/item and user cancellation nev
   }
 });
 
-test('Drive selection failure, multi-selection and missing labels never open a guessed fallback', async () => {
-  for (const kind of ['selection', 'multiple', 'label']) {
+test('Drive missing name metadata selects the row/cell itself without activating nested actions', async () => {
+  for (const role of ['row', 'gridcell']) {
+    for (const kind of ['tooltip', 'label', 'nested']) {
+      const h = driveHarness(role);
+      delete h.label.attrs['data-tooltip'];
+      if (kind === 'label') { h.item.children = []; h.label.parentElement = null; }
+      const nested = new Element('button', { 'data-id': h.item.attrs['data-id'], 'data-tooltip': 'action' });
+      if (kind === 'nested') { h.item.children.push(nested); nested.parentElement = h.item; }
+      h.item.onDispatch = e => { if (e.type === 'mousedown') h.item.attrs['aria-selected'] = 'true'; };
+      h.dispatch(kind === 'label' ? h.item : h.icon); await flush();
+      assert.deepEqual(h.item.events.map(e => e.type), ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'keydown']);
+      assert.equal(h.item.events[5].key, 'Enter');
+      assert.equal(Boolean(h.item.events[5].ctrlKey), false);
+      assert.equal(h.label.events, undefined);
+      assert.equal(nested.events, undefined);
+      assert.deepEqual(h.notices, []);
+    }
+  }
+});
+
+test('Drive waits for delayed sole selection instead of failing after 50ms', async () => {
+  const timers = [];
+  const h = driveHarness('row', { scheduleTimeout(fn, delay) { timers.push({ fn, delay }); } });
+  h.label.onDispatch = () => {};
+  h.dispatch(h.icon); await flush();
+  for (let step = 0; step < 3; step++) {
+    const timer = timers.shift(); assert.equal(timer.delay, 50);
+    timer.fn(); await flush();
+    assert.equal(h.item.events, undefined);
+    assert.deepEqual(h.notices, []);
+  }
+  h.item.attrs['aria-selected'] = 'true';
+  timers.shift().fn(); await flush();
+  assert.equal(h.item.events.length, 1);
+  assert.equal(h.item.events[0].key, 'Enter');
+  h.receive({ type: 'driveOpenFeedback', requestId: h.messages[0].requestId, reason: 'drive-opened' });
+});
+
+test('Drive stops delayed selection after one second and reports selection failure', async () => {
+  const timers = [];
+  const h = driveHarness('row', { scheduleTimeout(fn, delay) { timers.push({ fn, delay }); } });
+  h.label.onDispatch = () => {};
+  h.dispatch(h.icon); await flush();
+  let elapsed = 0;
+  for (let step = 0; step < 20; step++) {
+    const timer = timers.shift(); elapsed += timer.delay;
+    timer.fn(); await flush();
+    assert.equal(h.item.events, undefined);
+    if (step < 19) assert.deepEqual(h.notices, []);
+  }
+  assert.equal(elapsed, 1000);
+  assert.equal(timers.length, 0);
+  assert.deepEqual(h.notices, ['drive-selection-failed']);
+  assert.ok(h.messages.some(m => m.type === 'cancelDriveDefaultOpen'));
+});
+
+test('Drive delayed selection never opens after source/item replacement or user cancellation', async () => {
+  for (const kind of ['url', 'id', 'removed', 'cancel']) {
+    const timers = [];
+    const h = driveHarness('row', { scheduleTimeout(fn) { timers.push(fn); } });
+    h.label.onDispatch = () => {};
+    h.dispatch(h.icon); await flush();
+    if (kind === 'url') h.location.pathname = '/drive/home';
+    if (kind === 'id') h.item.attrs['data-id'] = 'other_1234567890';
+    if (kind === 'removed') h.item.parentElement = null;
+    if (kind === 'cancel') h.dispatch(h.icon, 'keydown', { isTrusted: true });
+    h.item.attrs['aria-selected'] = 'true';
+    timers.shift()(); await flush();
+    assert.equal(h.item.events, undefined, kind);
+    assert.deepEqual(h.notices, kind === 'cancel' ? [] : ['drive-source-changed']);
+    assert.ok(h.messages.some(m => m.type === 'cancelDriveDefaultOpen'));
+  }
+});
+
+test('Drive distinguishes rejected preparation from asynchronous and synchronous connection errors', async () => {
+  for (const kind of ['denied', 'stale', 'busy', 'async', 'sync']) {
+    const h = driveHarness('row', { driveAcknowledge() {
+      if (kind === 'sync') throw new Error('Extension context invalidated');
+      if (kind === 'async') return Promise.reject(new Error('No receiver'));
+      return Promise.resolve({ ok: false, reason: kind === 'denied' ? undefined :
+        kind === 'stale' ? 'drive-registration-stale-source' : 'drive-registration-busy' });
+    } });
+    h.dispatch(h.icon); await flush();
+    assert.equal(h.label.events, undefined);
+    assert.equal(h.item.events, undefined);
+    assert.deepEqual(h.notices, [kind === 'denied' ? 'drive-registration-failed' :
+      kind === 'stale' ? 'drive-registration-stale-source' : kind === 'busy' ? 'drive-registration-busy' : 'drive-connection-failed']);
+  }
+});
+
+test('Drive selection failure and multi-selection never send Enter or open a guessed fallback', async () => {
+  for (const kind of ['selection', 'multiple']) {
     const h = driveHarness();
     if (kind === 'selection') h.label.onDispatch = () => {};
     if (kind === 'multiple') {
       const other = driveItem(); other.item.attrs['aria-selected'] = 'true';
       h.item.parentElement.children.push(other.item); other.item.parentElement = h.item.parentElement;
     }
-    if (kind === 'label') delete h.label.attrs['data-tooltip'];
-    h.dispatch(h.icon); await flush();
+    h.dispatch(h.icon); await flush(); await flush();
     assert.equal(h.item.events, undefined, kind);
     assert.ok(h.messages.some(m => m.type === 'cancelDriveDefaultOpen'));
-    assert.ok(h.notices.includes('drive-open-failed'));
+    assert.ok(h.notices.includes('drive-selection-failed'));
     assert.equal(h.messages.some(m => m.type === 'maybeOpenOnMiddle'), false);
   }
 });
@@ -869,7 +1036,7 @@ test('Drive leaves an already-open preview alone instead of replaying a hidden i
   h.root.children[0].children.push(frame); frame.parentElement = h.root.children[0];
   h.dispatch(h.icon);
   assert.equal(h.messages.length, 0);
-  assert.ok(h.notices.includes('drive-open-failed'));
+  assert.ok(h.notices.includes('drive-preview-active'));
 });
 
 test('Drive uses the parent close control when the preview toolbar is in an iframe', async () => {

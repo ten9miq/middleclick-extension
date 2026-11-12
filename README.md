@@ -19,13 +19,15 @@ SVG drawing references (such as `<use href="...svg#icon">`), resource metadata a
 
 ## Google Drive items
 
+Folder-path breadcrumbs also support middle-click, including My Drive, ancestor folders and the current folder menu button. These open directly in an adjacent background tab without changing the source page or invoking the menu. Account context and folder resource keys are preserved; no learning permission is needed.
+
 On `https://drive.google.com/drive/...`, middle-clicking a selectable list row or grid item selects that item and invokes Drive's normal **Open** action (Enter), letting Drive choose its current default app. The extension does not construct editor URLs from filenames, icons or file types, and does not cache a default-app decision. No site-wide automatic-learning grant is needed for this Drive-specific open action.
 
 - If Drive opens an app in a new tab, that actual tab is placed immediately to the right of the source, inherits its tab group and returns focus to the source if the app took it. A user's switch to another tab is respected.
 - If Drive navigates the current tab (for example, into a folder), the original history entry is restored before opening the observed destination in an adjacent background tab. If that entry is unavailable, the original URL is reloaded; scroll and other application state may then be lost.
 - If the normal action shows an embedded Drive preview, the extension closes that preview and invokes Drive's **Open selected items in new tab** shortcut (Ctrl+Enter on Windows). Using Ctrl+Enter unconditionally would force a preview even for Markdown whose normal default is Google Docs. [Google's shortcut list](https://support.google.com/drive/answer/2563044?hl=en) documents both actions.
 
-The clicked item becomes the sole selection. A folder transition, preview or foreground app tab can appear briefly while the operation completes. Nested owner buttons and action menus keep their own behavior; ordinary left clicks and double clicks remain available. Failed selection, changed controls, missing preview controls or an opening timeout report failure without guessing a fallback destination.
+The clicked item becomes the sole selection. If name tooltip metadata is unavailable, selection clicks the row/cell itself; the extension waits up to one second for sole selection before invoking Open. A folder transition, preview or foreground app tab can appear briefly while the operation completes. Nested owner buttons and action menus keep their own behavior; ordinary left clicks and double clicks remain available. Preparation rejection, connection errors, changed controls, failed selection, an active preview and opening timeout have distinct feedback. Failures do not guess a fallback destination.
 
 Real-site checks cover folders, Markdown opening in Docs, XML opening as a Drive preview, and Colab opening in its default app, including list and grid items, using synthetic middle-button events. Physical mouse input, multiple accounts, PDFs, Office formats, shortcut items and every possible custom app have not been verified. Downloads, OS applications and apps opening a separate window cannot be guaranteed to become browser tabs. Drive DOM changes and popup restrictions can prevent the replay from working.
 

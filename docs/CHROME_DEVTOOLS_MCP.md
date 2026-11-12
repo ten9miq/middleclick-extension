@@ -6,7 +6,7 @@
 
 - Windows、PowerShell、Codex、Google Chrome、Node.js / npm（`node`・`npx`がPATHにあること）。MCPのNode要件は使用版の公式READMEで確認する。
 - Gitルート・展開済み拡張の読み込み元は `middleclick-extension` フォルダー。以下では、その環境で取得した絶対パスを `$repoRoot` と表記する。Driveの既定動作対応ではbackgroundから読み込む `drive-opening.js` も必要。
-- `manifest.json` はManifest V3 / MiddleClick+ 1.5.0。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`drive-opening.js`、`feedback.js`、`content.js`、`event-analysis-client.js`、MAIN worldの`event-analysis-main.js`・`event-analysis.js`・`vendor/acorn/acorn.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。イベント解析の仕様と検証結果は [EVENT_ANALYSIS.md](EVENT_ANALYSIS.md) を参照する。
+- `manifest.json` はManifest V3 / MiddleClick+ 1.5.1。`background.js`、`navigation-learning.js`、`navigation-probe.js`、`drive-opening.js`、`feedback.js`、`content.js`、`event-analysis-client.js`、MAIN worldの`event-analysis-main.js`・`event-analysis.js`・`vendor/acorn/acorn.js`、`icons/logo.png` を使用する。package.jsonとビルド設定はない。ビルド不要で、出力先も別にない。回帰テストは `tests/*.test.cjs` にある。`storage` と `webNavigation` が必要。イベント解析の仕様と検証結果は [EVENT_ANALYSIS.md](EVENT_ANALYSIS.md) を参照する。
 - 親の `MiddleClick+_enhanced` はGitルートではない。隣の `MiddleClick+_enhanced_1.2.1` と `releases` は読み込み元にしない。
 - READMEは英語の1ファイルだけ。旧版フォルダーのREADMEは別版の資料であり同期対象ではない。
 - この拡張にポップアップやオプション画面はない。対象ページでの中クリック動作が実画面検証の中心になる。
@@ -134,6 +134,21 @@ Codexによる自動検証には汎用の `scripts/synthetic-middle-click.js` �
 - 旧v1／section-v1記録を保存し直さずに照合する。プロジェクトの旧ラベルを使う場合は移動先のIDも照合。同名別プロジェクト、競合・曖昧・重複記録、origin、90日期限は維持する。新キーでの競合を旧記録で回避しない。初期読込待ち後はキャッシュを再確認し、元ページ変更・別操作があれば中止する。
 - 実サイトのプロジェクト画面から、文字だけの通常の新しいチャットと、別プロジェクトの新しいチャットを合成中ボタンで検証した。両方ともruntimeメッセージはmaybeOpenOnMiddleのみで、beginSiteNavigationProbeや権限照会は0件。元ページclick・navigateは0件、URL・Navigation API entry key・active状態を維持し、右隣のバックグラウンドタブが1件増えた。保存記録は5件のまま増えず、既存記録の再利用を確認した。
 - 自動テスト110件、変更JS構文と差分検査が成功。並び替え、セクション移動、名前変更、再生成したDOM、読込待ち、競合排除は自動テストで確認した。実プロジェクトの順序・名前は変更していない。物理中クリック・普段使いのプロファイルの症状再現は未検証。個人のプロジェクト名・ID・会話本文はこの記録へ保存しない。
+
+## Google Driveの即時失敗への対策（2026-11-12）
+
+- Enterprise環境で操作直後に失敗し、画面移動がないとのユーザー報告に対応。対象の名前ツールチップ属性がなくても行／セル自身へ選択クリックを送り、単一選択の成立を50ms間隔で最大1秒待つ。別項目の選択・対象の差し替え・画面移動・ユーザーの中止後にはEnterを送らない。
+- プレビュー表示中、拡張との通信失敗、準備拒否、前操作の処理中、送信元URLの不一致、対象更新、単一選択失敗、操作再現エラー、10秒の移動先検出タイムアウトを別々の通知にした。Enterpriseでの実際の失敗段階・原因は未特定。
+- 自動テスト153件、変更JSの構文検査とgit diff --checkが成功。名前要素・ツールチップ欠落、入れ子アクション排除、選択遅延、1秒での打切り、途中中止、通信失敗と準備拒否の区別を検証した。
+- 引き続きユーザーが照合省略を許可した専用Chrome／9223を使用し、実行ファイル・プロファイル引数・HTTP応答・MCPの接続先と他の同時操作者がいないことを再確認した。読み込み元を前回install_extensionした対象IDで再読み込み。1242×1053の新規検証タブで名前要素のdata-tooltipを一時的に取り除いて合成中クリックし、行自身の選択から右隣の背景タブが1件増え、元URL・entry key・activeと未所属グループを維持することを確認した。Enterprise環境の再現や今回修正後の物理入力検証ではない。検証タブと一時DOM変更は破棄した。
+
+## Google Driveのパンくず（2026-11-12）
+
+- Chrome 157.0.8103.39、MCP 1.13.0、接続先9223で検証した。実行ファイル・専用プロファイル引数・HTTP応答とMCPのworkspace／接続先を確認。WindowsのTCP一覧に待受が出ずポート所有者は照合不能だったため、ユーザーが今回の照合省略を明示許可した。起動スクリプト全体の成功とは扱わない。
+- このGitルートをinstall_extensionで読み込み、更新後は対象拡張と検証ページを再読み込みした。フォルダの合成中クリックは成功し、ユーザーも物理中クリックで別タブへ開けると確認した。報告された既定動作のエラーは今回再現せず、当初の原因は未特定。
+- パンくずは`nav[guidedhelpid="folder_path"]`内の`role="link"`、`data-target="folder"`、`data-id`からフォルダURLを解決する。アカウントのパス／authuserと、対象自身のdata-rkをresourcekeyとして保持する。現在フォルダのメニューボタンだけは現在のURLを開き、メニューを実行しない。
+- 1242×1053の同じ元画面から、祖先フォルダ・マイドライブ・現在フォルダに合成中ボタンの一連のイベントを送信した。各1タブだけ右隣の背景に増え、元タブactive、groupId=-1、元URLとNavigation API entry keyを維持した。元画面のclick／navigateは0件、表示メニューは0件。祖先の通常左クリックでも同じresourcekey付きURLへ移動した。
+- 自動テスト147件、変更JSの構文検査、git diff --checkが成功。対象service workerのwarn/errorは0件。パンくずの物理中クリック、複数アカウントの実画面は未確認（アカウント引継ぎは自動テスト）。私的なフォルダ名・ID・URLは保存しない。
 
 ## Google Driveの既定の開き方（2026-10-31）
 

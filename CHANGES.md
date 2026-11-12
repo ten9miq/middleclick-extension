@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.1
+
+- Open Google Drive folder-path breadcrumbs directly in an adjacent background tab. Preserve account context and each folder's resource key; middle-clicking the current folder opens its current URL without invoking its menu.
+- Add regression coverage for breadcrumb gestures, source preservation, account/resource keys, and exclusion of nested actions and unrelated controls.
+- Select Drive rows/cells directly when name tooltip metadata is missing, and wait up to one second for sole selection before invoking Open. Distinguish preparation rejection, stale source URLs, connection errors, selection failure, an active preview and opening timeout in feedback.
+- Verify 153 automated tests and dedicated-Chrome synthetic checks for breadcrumbs and missing tooltip metadata. The Enterprise-specific immediate failure has not been reproduced; the new feedback identifies which preparation stage fails.
+
 ## 1.5.0
 
 - Analyze supported event handlers as data before discovering an unknown destination. Add a bundled Acorn parser, a read-only MAIN-world bridge, React/compiler binding extraction and bounded Webpack/Rspack module resolution. Open resolvable same-origin URLs directly; retain existing learned destinations and the site-consent learning fallback for unsupported handlers and navigation state.

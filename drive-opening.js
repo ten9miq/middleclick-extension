@@ -26,8 +26,12 @@
         if (previous?.requestId === message.requestId) remove(previous);
         respond({ ok: true }); return;
       }
-      if (message.sourceUrl !== source.href || !/^[A-Za-z0-9_-]{10,200}$/.test(message.itemId || '') ||
-        typeof message.requestId !== 'string' || !message.requestId || message.requestId.length > 100 || previous) {
+      if (previous) { respond({ ok: false, reason: 'drive-registration-busy' }); return; }
+      if (message.sourceUrl !== source.href) {
+        respond({ ok: false, reason: 'drive-registration-stale-source' }); return;
+      }
+      if (!/^[A-Za-z0-9_-]{10,200}$/.test(message.itemId || '') ||
+        typeof message.requestId !== 'string' || !message.requestId || message.requestId.length > 100) {
         respond({ ok: false }); return;
       }
       if (message.entryKey !== undefined && (typeof message.entryKey !== 'string' || message.entryKey.length > 200)) {
@@ -35,7 +39,7 @@
       }
       const record = { sourceTab: sender.tab, sourceUrl: source.href, requestId: message.requestId,
         entryKey: message.entryKey || '', phase: 'observing' };
-      record.timer = setTimeout(() => { remove(record); feedback(record, 'drive-open-failed'); }, 10000);
+      record.timer = setTimeout(() => { remove(record); feedback(record, 'drive-open-timeout'); }, 10000);
       pending.set(sender.tab.id, record);
       cancelPassive(`${sender.tab.id}:0`);
       respond({ ok: true });

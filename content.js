@@ -298,6 +298,32 @@
     return /^[A-Za-z0-9_-]{10,200}$/.test(id) ? id : null;
   }
 
+  function driveBreadcrumbDestination(control, target) {
+    if (window !== top || location.origin !== 'https://drive.google.com' ||
+      !/^\/drive(?:\/|$)/.test(location.pathname) || !control ||
+      !control.closest('nav[guidedhelpid="folder_path"]') ||
+      control.closest('form') || control.form) return null;
+    // The current folder is a menu button, but its middle-click destination
+    // is the current URL. Do not invoke that menu or borrow an ancestor ID.
+    if (control.getAttribute('role') === 'button' &&
+      control.parentElement?.getAttribute('guidedhelpid') === 'folder_path_button') {
+      if (control.hasAttribute('disabled') || control.getAttribute('aria-disabled') === 'true' ||
+        target?.closest('input, textarea, select, [contenteditable="true"]')) return null;
+      return location.href;
+    }
+    if (blockedControl(control, target) || control.getAttribute('role') !== 'link' ||
+      control.getAttribute('data-target') !== 'folder') return null;
+    const id = control.getAttribute('data-id') || '';
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return null;
+    const accountPath = location.pathname.match(/^\/drive\/u\/\d+(?=\/|$)/)?.[0] || '/drive';
+    const url = new URL(`${accountPath}/folders/${id}`, location.origin);
+    const account = new URLSearchParams(location.search).get('authuser');
+    if (account) url.searchParams.set('authuser', account);
+    const resourceKey = control.getAttribute('data-rk');
+    if (resourceKey) url.searchParams.set('resourcekey', resourceKey);
+    return url.href;
+  }
+
   function cancelDriveOpen() {
     if (!driveOpen) return;
     sendMessage({ type: 'cancelDriveDefaultOpen', requestId: driveOpen.requestId });
@@ -334,31 +360,37 @@
     if (lastDriveGesture.control === control && now - lastDriveGesture.time < 120) return true;
     lastDriveGesture = { control, time: now };
     if (driveOpen) { notify('busy'); return true; }
-    if (visibleDrivePreview()) { notify('drive-open-failed'); return true; }
+    if (visibleDrivePreview()) { notify('drive-preview-active'); return true; }
     const request = { requestId: Date.now() + ':' + (++requestSequence), sourceUrl: location.href, itemId,
       entryKey: window.navigation?.currentEntry?.key || '' };
     driveOpen = request;
-    Promise.resolve(chrome.runtime.sendMessage({ type: 'beginDriveDefaultOpen', ...request })).then(async response => {
+    const current = () => location.href === request.sourceUrl && control.isConnected && driveItemId(control) === itemId;
+    const fail = reason => { cancelDriveOpen(); notify(reason); };
+    let failureReason = 'drive-connection-failed';
+    (async () => chrome.runtime.sendMessage({ type: 'beginDriveDefaultOpen', ...request }))().then(async response => {
       if (driveOpen !== request) return;
-      if (!response?.ok || location.href !== request.sourceUrl || !control.isConnected || driveItemId(control) !== itemId) {
-        cancelDriveOpen(); notify('drive-open-failed'); return;
-      }
+      if (!response?.ok) { fail(response?.reason || 'drive-registration-failed'); return; }
+      if (!current()) { fail('drive-source-changed'); return; }
+      failureReason = 'drive-action-failed';
       // Select only this item, then let Drive choose the current default app.
-      // The label is bound to the same ID; nested action buttons are excluded.
+      // Prefer the name label, but its tooltip metadata is not required for
+      // selection: Drive's row/cell can receive the click itself. Never select
+      // through a nested action button with a matching ID.
       const target = [...control.querySelectorAll('[data-id]')].find(el =>
-        el.getAttribute('data-id') === itemId && el.hasAttribute('data-tooltip'));
-      if (!target) { cancelDriveOpen(); notify('drive-open-failed'); return; }
+        el.getAttribute('data-id') === itemId && el.hasAttribute('data-tooltip') &&
+        el.closest(CLICKABLE_SELECTOR) === control) || control;
       driveLeftClick(target);
-      // Drive updates its keyboard selection after processing the mouse action.
-      await new Promise(resolve => setTimeout(resolve, 50));
-      if (driveOpen !== request) return;
-      if (location.href !== request.sourceUrl || !control.isConnected || driveItemId(control) !== itemId) {
-        cancelDriveOpen(); notify('drive-open-failed'); return;
+      // Selection can take longer than one 50ms tick. Wait up to one second,
+      // checking the source and exact sole selection before sending Enter.
+      let selected = false;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (driveOpen !== request) return;
+        if (!current()) { fail('drive-source-changed'); return; }
+        const items = document.querySelectorAll('[data-target="doc"][data-selectable][aria-selected="true"]');
+        if (items.length === 1 && items[0] === control) { selected = true; break; }
       }
-      const selected = document.querySelectorAll('[data-target="doc"][data-selectable][aria-selected="true"]');
-      if (control.getAttribute('aria-selected') !== 'true' || selected.length !== 1) {
-        cancelDriveOpen(); notify('drive-open-failed'); return;
-      }
+      if (!selected) { fail('drive-selection-failed'); return; }
       control.focus({ preventScroll: true });
       control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true,
         key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
@@ -389,7 +421,7 @@
           key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey: true }));
         return;
       }
-    }).catch(() => { if (driveOpen === request) { cancelDriveOpen(); notify('drive-open-failed'); } });
+    }).catch(() => { if (driveOpen === request) fail(failureReason); });
     return true;
   }
 
@@ -522,6 +554,8 @@
 
   function resolveUrl(e) {
     const control = clickControl(e);
+    const breadcrumb = driveBreadcrumbDestination(control, e.target);
+    if (breadcrumb) return breadcrumb;
     if (blockedControl(control, e.target)) return null;
     const special = codexDestination(control);
     if (special) return special;
@@ -720,7 +754,8 @@
       activeProbe = false;
       probeAttempt++;
       const control = clickControl(e);
-      if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || driveItemId(control) || codexDestination(control) || staticUrl(e, control)) {
+      if (e.button !== 0 || hasMods(e) || blockedControl(control, e.target) || driveItemId(control) ||
+        driveBreadcrumbDestination(control, e.target) || codexDestination(control) || staticUrl(e, control)) {
         cancel();
         return;
       }
